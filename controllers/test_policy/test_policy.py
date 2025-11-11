@@ -28,12 +28,56 @@ robot = Supervisor()
 scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP)
 
 # ================== LOAD MODEL ==================
-checkpoint_path = os.path.join(os.path.dirname(__file__), '..', 'op3_ddpg_env', 
-                                config.CHECKPOINT_DIR, config.CHECKPOINT_NAME)
+# Get checkpoint path from environment variable or use default
+checkpoint_arg = os.environ.get('CHECKPOINT_PATH', None)
+
+if checkpoint_arg:
+    # Checkpoint path provided (can be relative like "yudhis/ddpg_model.pt" or full path)
+    if '/' in checkpoint_arg or '\\' in checkpoint_arg:
+        # Has subdirectory - construct full path
+        path_parts = checkpoint_arg.replace('\\', '/').split('/')
+        checkpoint_path = os.path.join(
+            os.path.dirname(__file__), '..', 'op3_ddpg_env',
+            config.CHECKPOINT_DIR, *path_parts
+        )
+    else:
+        # Just filename - use default location
+        checkpoint_path = os.path.join(
+            os.path.dirname(__file__), '..', 'op3_ddpg_env',
+            config.CHECKPOINT_DIR, checkpoint_arg
+        )
+else:
+    # Default: try scenario-specific checkpoint first, then fallback to default
+    # Extract scenario name from class name (e.g., "ArmControlYudhis" -> "yudhis")
+    scenario_class_name = SCENARIO_CLASS.__name__
+    if 'Yudhis' in scenario_class_name:
+        scenario_name = 'yudhis'
+    elif 'PakGembong' in scenario_class_name or 'Gembong' in scenario_class_name:
+        scenario_name = 'pak_gembong'
+    else:
+        # Fallback: convert to lowercase and remove common prefixes
+        scenario_name = scenario_class_name.lower().replace('armcontrol', '').replace('control', '')
+    
+    scenario_checkpoint = os.path.join(
+        os.path.dirname(__file__), '..', 'op3_ddpg_env',
+        config.CHECKPOINT_DIR, scenario_name, config.CHECKPOINT_NAME
+    )
+    
+    default_checkpoint = os.path.join(
+        os.path.dirname(__file__), '..', 'op3_ddpg_env',
+        config.CHECKPOINT_DIR, config.CHECKPOINT_NAME
+    )
+    
+    # Try scenario-specific first, then default
+    if os.path.exists(scenario_checkpoint):
+        checkpoint_path = scenario_checkpoint
+    else:
+        checkpoint_path = default_checkpoint
 
 if not os.path.exists(checkpoint_path):
     print(f"❌ Error: Model checkpoint not found at {checkpoint_path}")
-    print("Please train the model first using train.py")
+    print("Please train the model first or specify checkpoint with CHECKPOINT_PATH environment variable")
+    print(f"Example: CHECKPOINT_PATH='yudhis/ddpg_model.pt' python test_policy.py")
     robot.step(config.TIMESTEP)
     sys.exit(1)
 

@@ -127,4 +127,55 @@ class DDPG:
         agent.critic.load_state_dict(checkpoint['critic_state_dict'])
         agent.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
         return agent
+    
+    def mutate(self, mutation_rate=0.1, mutation_strength=0.1):
+        """
+        Apply mutation to the agent's networks (for genetic algorithm).
+        
+        Args:
+            mutation_rate: Probability of mutating each parameter
+            mutation_strength: Standard deviation of mutation noise
+        """
+        with torch.no_grad():
+            # Mutate actor
+            for param in self.actor.parameters():
+                if np.random.random() < mutation_rate:
+                    noise = torch.randn_like(param) * mutation_strength
+                    param.add_(noise)
+            
+            # Mutate critic
+            for param in self.critic.parameters():
+                if np.random.random() < mutation_rate:
+                    noise = torch.randn_like(param) * mutation_strength
+                    param.add_(noise)
+            
+            # Update target networks
+            self.actor_target.load_state_dict(self.actor.state_dict())
+            self.critic_target.load_state_dict(self.critic.state_dict())
+    
+    def copy_from(self, other_agent, mutation_rate=0.0, mutation_strength=0.0):
+        """
+        Copy weights from another agent, optionally with mutation.
+        
+        Args:
+            other_agent: Source agent to copy from
+            mutation_rate: Probability of mutating each parameter (0 = exact copy)
+            mutation_strength: Standard deviation of mutation noise
+        """
+        # Copy actor weights
+        self.actor.load_state_dict(other_agent.actor.state_dict())
+        self.critic.load_state_dict(other_agent.critic.state_dict())
+        
+        # Update target networks
+        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        
+        # Apply mutation if specified
+        if mutation_rate > 0:
+            self.mutate(mutation_rate, mutation_strength)
+        
+        # Reset optimizers (fresh start for new generation)
+        self.actor_opt = optim.Adam(self.actor.parameters(), lr=config.LR_ACTOR)
+        self.critic_opt = optim.Adam(self.critic.parameters(), lr=config.LR_CRITIC)
+        self.buffer = []  # Clear replay buffer
 

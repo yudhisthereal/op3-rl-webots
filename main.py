@@ -16,10 +16,18 @@ import os
 import re
 from pathlib import Path
 
+# Import genetic config for population size display
+try:
+    sys.path.insert(0, str(Path(__file__).parent / "controllers" / "op3_ddpg_env"))
+    import genetic_config
+except ImportError:
+    genetic_config = None
+
 # Project paths
 PROJECT_ROOT = Path(__file__).parent
 CONTROLLERS_DIR = PROJECT_ROOT / "controllers"
 TRAIN_CONTROLLER = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_env.py"
+GENETIC_CONTROLLER = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_genetic.py"
 TEST_CONTROLLER = CONTROLLERS_DIR / "test_policy" / "test_policy.py"
 TRAIN_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_train.wbt"
 TEST_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_test.wbt"
@@ -136,53 +144,88 @@ def update_scenario_in_file(file_path, scenario_name):
         f.writelines(updated_lines)
 
 
-def update_checkpoint_in_file(file_path, checkpoint_name):
-    """Update checkpoint name in test_policy.py."""
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
+def update_checkpoint_in_file(file_path, checkpoint_path):
+    """Update checkpoint path in test_policy.py.
     
-    # Find and update the checkpoint_path assignment (may span multiple lines)
-    updated_lines = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if 'checkpoint_path' in line and 'os.path.join' in line:
-            # This is the start of checkpoint_path assignment
-            # Check if it continues on next line
-            if 'config.CHECKPOINT_NAME' in line:
-                # Single line case
-                line = re.sub(
-                    r'config\.CHECKPOINT_NAME',
-                    f'"{checkpoint_name}"',
-                    line
-                )
-                updated_lines.append(line)
-            else:
-                # Multi-line case - add current line and check next
-                updated_lines.append(line)
-                i += 1
-                if i < len(lines) and 'config.CHECKPOINT_NAME' in lines[i]:
-                    # Replace on next line
-                    next_line = re.sub(
-                        r'config\.CHECKPOINT_NAME',
-                        f'"{checkpoint_name}"',
-                        lines[i]
-                    )
-                    updated_lines.append(next_line)
-                else:
-                    # Not found, keep original
-                    if i < len(lines):
-                        updated_lines.append(lines[i])
+    Args:
+        checkpoint_path: Full checkpoint path (e.g., "yudhis/ddpg_model.pt" or "ddpg_model.pt")
+    """
+    with open(file_path, 'r') as f:
+        content = f.read()
+    
+    # Check if checkpoint_path contains a subdirectory
+    has_subdir = '/' in checkpoint_path or '\\' in checkpoint_path
+    
+    if has_subdir:
+        # Full path with subdirectory - replace entire checkpoint_path assignment
+        # Split path and build os.path.join expression
+        path_parts = checkpoint_path.replace('\\', '/').split('/')
+        
+        # Build the path parts for os.path.join
+        path_args = ["os.path.dirname(__file__)", "'..'", "'op3_ddpg_env'", "'checkpoints'"]
+        path_args.extend([f"'{part}'" for part in path_parts])
+        path_join_expr = "os.path.join(" + ", ".join(path_args) + ")"
+        
+        # Replace the entire checkpoint_path assignment (handles multi-line)
+        # Match both single-line and multi-line patterns
+        multiline_pattern = r'checkpoint_path\s*=\s*os\.path\.join\([^)]*\n[^)]*\)'
+        singleline_pattern = r'checkpoint_path\s*=\s*os\.path\.join\([^)]+\)'
+        
+        replacement = f'checkpoint_path = {path_join_expr}'
+        
+        if re.search(multiline_pattern, content, re.MULTILINE):
+            content = re.sub(multiline_pattern, replacement, content, flags=re.MULTILINE)
+        elif re.search(singleline_pattern, content):
+            content = re.sub(singleline_pattern, replacement, content)
         else:
-            updated_lines.append(line)
-        i += 1
+            # Fallback: try to find any checkpoint_path assignment
+            pattern = r'checkpoint_path\s*=\s*[^\n]+'
+            content = re.sub(pattern, replacement, content)
+    else:
+        # Just filename - replace config.CHECKPOINT_NAME or hardcoded "ddpg_model.pt"
+        # Handle multi-line checkpoint_path assignment (test_policy.py uses multi-line)
+        
+        # Pattern for multi-line: matches across newlines (test_policy.py format)
+        # Matches: checkpoint_path = os.path.join(..., \n ... config.CHECKPOINT_DIR, "ddpg_model.pt")
+        multiline_pattern = r'(checkpoint_path\s*=\s*os\.path\.join\([^)]*\n\s*[^)]*,\s*)(?:config\.CHECKPOINT_NAME|"ddpg_model\.pt")'
+        replacement_multiline = rf'\1"{checkpoint_path}"'
+        
+        # Pattern for single-line
+        singleline_pattern = r'(checkpoint_path\s*=\s*os\.path\.join\([^)]+,\s*)(?:config\.CHECKPOINT_NAME|"ddpg_model\.pt")'
+        replacement_singleline = rf'\1"{checkpoint_path}"'
+        
+        # Try multi-line first (most common case in test_policy.py)
+        if re.search(multiline_pattern, content, re.MULTILINE | re.DOTALL):
+            content = re.sub(multiline_pattern, replacement_multiline, content, flags=re.MULTILINE | re.DOTALL)
+        elif re.search(singleline_pattern, content):
+            content = re.sub(singleline_pattern, replacement_singleline, content)
+        else:
+            # Fallback: replace just the filename part anywhere it appears
+            # This handles the case where config.CHECKPOINT_DIR is on a different line
+            content = re.sub(
+                r'"ddpg_model\.pt"',
+                f'"{checkpoint_path}"',
+                content
+            )
+            # Also try config.CHECKPOINT_NAME
+            content = re.sub(
+                r'config\.CHECKPOINT_NAME',
+                f'"{checkpoint_path}"',
+                content
+            )
     
     with open(file_path, 'w') as f:
-        f.writelines(updated_lines)
+        f.write(content)
 
 
-def launch_webots(world_file, mode="fast"):
-    """Launch Webots with the specified world file."""
+def launch_webots(world_file, mode="fast", env=None):
+    """Launch Webots with the specified world file.
+    
+    Args:
+        world_file: Path to world file
+        mode: Webots mode (fast, run, etc.)
+        env: Optional environment variables dict
+    """
     webots_path = find_webots()
     
     if not webots_path:
@@ -200,7 +243,7 @@ def launch_webots(world_file, mode="fast"):
     print(f"🚀 Launching Webots: {' '.join(cmd)}")
     
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, env=env, check=True)
     except subprocess.CalledProcessError as e:
         print(f"❌ Error: Webots exited with error code {e.returncode}")
         sys.exit(1)
@@ -217,6 +260,8 @@ def main():
 Examples:
   python main.py --train --scenario=pak_gembong
   python main.py --train --scenario=yudhis
+  python main.py --genetic --scenario=pak_gembong
+  python main.py --genetic --scenario=yudhis
   python main.py --test --scenario=yudhis
   python main.py --test --scenario=yudhis --checkpoint=ddpg_model.pt
         """
@@ -225,6 +270,7 @@ Examples:
     # Mode selection
     mode_group = parser.add_mutually_exclusive_group(required=True)
     mode_group.add_argument('--train', action='store_true', help='Run training mode')
+    mode_group.add_argument('--genetic', action='store_true', help='Run genetic algorithm multi-agent training')
     mode_group.add_argument('--test', action='store_true', help='Run testing mode')
     
     # Scenario selection
@@ -261,18 +307,57 @@ Examples:
             print(f"🎮 Launching training world...")
             launch_webots(TRAIN_WORLD)
             
+        elif args.genetic:
+            print(f"📝 Setting up parallel genetic training with scenario: {args.scenario}")
+            
+            # Update genetic parallel controller scenario
+            genetic_parallel_controller = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_genetic_parallel.py"
+            update_scenario_in_file(genetic_parallel_controller, args.scenario)
+            print(f"✅ Updated {genetic_parallel_controller}")
+            
+            # Run parallel genetic training script
+            parallel_script = CONTROLLERS_DIR / "op3_ddpg_env" / "run_genetic_parallel.py"
+            scenario_class = SCENARIOS[args.scenario]["class"]
+            
+            print(f"🚀 Launching parallel genetic training...")
+            if genetic_config:
+                print(f"   This will launch {genetic_config.POPULATION_SIZE} Webots instances in parallel")
+            else:
+                print(f"   This will launch multiple Webots instances in parallel")
+            
+            import subprocess
+            result = subprocess.run(
+                [sys.executable, str(parallel_script), scenario_class],
+                cwd=str(CONTROLLERS_DIR / "op3_ddpg_env")
+            )
+            
+            if result.returncode != 0:
+                print(f"❌ Genetic training failed with exit code {result.returncode}")
+                sys.exit(1)
+            
         elif args.test:
             print(f"📝 Setting up testing with scenario: {args.scenario}")
             update_scenario_in_file(TEST_CONTROLLER, args.scenario)
             print(f"✅ Updated {TEST_CONTROLLER}")
             
+            # Set checkpoint path via environment variable
+            env = os.environ.copy()
             if args.checkpoint:
-                print(f"📦 Setting checkpoint to: {args.checkpoint}")
-                update_checkpoint_in_file(TEST_CONTROLLER, args.checkpoint)
-                print(f"✅ Updated checkpoint in {TEST_CONTROLLER}")
+                env['CHECKPOINT_PATH'] = args.checkpoint
+                print(f"📦 Using checkpoint: {args.checkpoint}")
+            else:
+                # Use scenario-specific default
+                try:
+                    sys.path.insert(0, str(CONTROLLERS_DIR / "op3_ddpg_env"))
+                    import config as train_config
+                    scenario_checkpoint = f"{args.scenario}/{train_config.CHECKPOINT_NAME}"
+                    env['CHECKPOINT_PATH'] = scenario_checkpoint
+                    print(f"📦 Using default checkpoint for scenario: {scenario_checkpoint}")
+                except:
+                    pass
             
             print(f"🎮 Launching test world...")
-            launch_webots(TEST_WORLD)
+            launch_webots(TEST_WORLD, mode="fast", env=env)
             
     except Exception as e:
         print(f"❌ Error: {e}")

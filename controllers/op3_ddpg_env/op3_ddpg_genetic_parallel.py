@@ -21,6 +21,7 @@ SCENARIO_CLASS = ArmControlYudhis
 AGENT_ID = int(os.environ.get('AGENT_ID', '0'))
 STAGE = int(os.environ.get('STAGE', '1'))
 CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', None)
+SCENARIO_NAME = os.environ.get('SCENARIO_NAME', 'default')
 
 if __name__ == "__main__":
     robot = Supervisor()
@@ -76,8 +77,9 @@ if __name__ == "__main__":
             print(f"Agent {AGENT_ID} | Ep {ep}/{genetic_config.EPISODES_PER_STAGE} | "
                   f"Avg Reward: {np.mean(episode_rewards[-10:]):.3f}")
     
-    # Save agent
-    checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, f"stage_{STAGE}")
+    # Save agent (with scenario name in path)
+    checkpoint_base_dir = os.path.join(config.CHECKPOINT_DIR, SCENARIO_NAME)
+    checkpoint_dir = os.path.join(checkpoint_base_dir, f"stage_{STAGE}")
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_path = os.path.join(checkpoint_dir, f"agent_{AGENT_ID}.pt")
     agent.save(checkpoint_path)
@@ -100,4 +102,8 @@ if __name__ == "__main__":
     print(f"Agent {AGENT_ID} completed!")
     print(f"  Avg Reward: {results['avg_reward']:.3f}")
     print(f"  Success Rate: {results['success_rate']:.1%}")
+    
+    # Exit Webots automatically
+    print(f"Agent {AGENT_ID} exiting Webots...")
+    robot.simulationQuit(0)
 
