@@ -41,6 +41,10 @@ SCENARIOS = {
     "yudhis": {
         "import": "from scenarios.arm_control_yudhis import ArmControlYudhis",
         "class": "ArmControlYudhis"
+    },
+    "fall_control": {
+        "import": "from scenarios.fall_control import FallControl",
+        "class": "FallControl"
     }
 }
 
@@ -90,27 +94,65 @@ def update_scenario_in_file(file_path, scenario_name):
     updated_lines = []
     scenario_init_found = False
     for i, line in enumerate(lines):
-        # Handle scenario import lines
-        if 'from scenarios.arm_control' in line:
-            # Comment out all, then uncomment the selected one
-            if scenario["import"] in line:
+        # NEVER comment out lines containing scenario_class_name or scenario_name assignments from SCENARIO_CLASS
+        if 'scenario_class_name' in line or ('scenario_name' in line and 'SCENARIO_CLASS.scenario_name' in line):
+            updated_lines.append(line)
+            continue
+        # Handle scenario import lines (match any scenario import, not just arm_control)
+        if 'from scenarios.' in line and 'import' in line:
+            # Check if this line matches our target scenario
+            stripped_line = line.strip()
+            is_commented = stripped_line.startswith('#')
+            line_content = stripped_line.lstrip('#').strip()
+            
+            # Preserve original indentation
+            indent = len(line) - len(line.lstrip())
+            
+            # Check if this line matches our target scenario import
+            # Match by checking if the class name is in the import line
+            target_class = scenario["class"]
+            if target_class in line_content:
                 # This is our scenario - uncomment it
-                updated_lines.append(scenario["import"] + '\n')
+                updated_lines.append(' ' * indent + scenario["import"] + '\n')
             else:
-                # This is another scenario - comment it
-                if not line.strip().startswith('#'):
-                    updated_lines.append('# ' + line)
+                # This is another scenario - comment it (if not already commented)
+                if not is_commented:
+                    updated_lines.append(' ' * indent + '# ' + line_content + '\n')
                 else:
                     updated_lines.append(line)
         # Handle SCENARIO_CLASS assignment
         elif 'SCENARIO_CLASS' in line and '=' in line and 'scenario =' not in line:
-            if scenario["class"] in line:
-                # This is our scenario - uncomment and ensure correct
-                updated_lines.append(f'SCENARIO_CLASS = {scenario["class"]}\n')
+            # Check if this line matches our target scenario class
+            stripped_line = line.strip()
+            is_commented = stripped_line.startswith('#')
+            line_content = stripped_line.lstrip('#').strip()
+            
+            # Preserve original indentation
+            indent = len(line) - len(line.lstrip())
+            
+            target_class = scenario["class"]
+            
+            # Check if this line assigns our target class
+            # Pattern: "SCENARIO_CLASS = ClassName" or "SCENARIO_CLASS=ClassName"
+            # Extract the class name from the assignment
+            if '=' in line_content:
+                assigned_class = line_content.split('=')[-1].strip()
+                is_target_class = assigned_class == target_class
             else:
-                # This is another scenario - comment it
-                if not line.strip().startswith('#'):
-                    updated_lines.append('# ' + line)
+                is_target_class = False
+            
+            if is_target_class:
+                # This is our scenario - ensure it's uncommented and correct
+                if is_commented:
+                    # Uncomment it
+                    updated_lines.append(' ' * indent + f'SCENARIO_CLASS = {target_class}\n')
+                else:
+                    # Already uncommented and correct - keep it as-is
+                    updated_lines.append(line)
+            else:
+                # This is another scenario - comment it (if not already commented)
+                if not is_commented:
+                    updated_lines.append(' ' * indent + '# ' + line_content + '\n')
                 else:
                     updated_lines.append(line)
         # Handle scenario initialization line (scenario = SCENARIO_CLASS(...))

@@ -10,6 +10,8 @@ import config
 class ArmControlPakGembong(BaseScenario):
     """Arm control scenario with Pak Gembong's reward function."""
     
+    scenario_name = 'pak_gembong'
+    
     def __init__(self, robot, timestep=32):
         self.CONTROL_JOINTS = ["ShoulderL", "ArmUpperL"]
         self.TARGET = np.array([1.57, -1.57], dtype=np.float32)
@@ -96,11 +98,22 @@ class ArmControlPakGembong(BaseScenario):
         self.dist_prev = dist
         
         # Check if done
-        done = (next_obs == self.TARGET).all() or step >= config.MAX_STEPS or dist < 0.01
+        done = (next_obs == self.TARGET).all() or step >= config.MAX_STEPS
         
         # Success reward
         if (next_obs == self.TARGET).all():
             reward = 1.0
         
         return reward, done
+    
+    def get_episode_metric(self, obs):
+        """Get distance to target for tracking."""
+        return np.linalg.norm(obs - self.TARGET)
+    
+    def is_success(self, obs, done):
+        """Check if target is reached exactly or within threshold."""
+        if not done:
+            return False
+        dist = np.linalg.norm(obs - self.TARGET)
+        return (obs == self.TARGET).all()
 

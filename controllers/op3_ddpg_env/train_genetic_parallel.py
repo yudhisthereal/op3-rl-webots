@@ -83,13 +83,13 @@ if __name__ == "__main__":
     
     # Training
     episode_rewards = []
-    episode_distances = []
+    episode_metrics = []  # Generic metric tracking (distance, acceleration, etc.)
     success_count = 0
     
     for ep in range(1, {genetic_config.EPISODES_PER_STAGE} + 1):
         obs = scenario.reset()
         total_reward = 0.0
-        min_dist = float('inf')
+        min_metric = float('inf')
         
         for step in range(config.MAX_STEPS):
             action = agent.get_action(obs, add_noise=True)
@@ -101,19 +101,21 @@ if __name__ == "__main__":
             agent.store((obs, action, reward, next_obs, float(done)))
             agent.update()
             
-            dist = np.linalg.norm(next_obs - scenario.TARGET)
-            min_dist = min(min_dist, dist)
+            # Get episode metric from scenario (e.g., distance to target, acceleration)
+            metric = scenario.get_episode_metric(next_obs)
+            min_metric = min(min_metric, metric)
             
             obs = next_obs
             total_reward += reward
             
-            if done or dist < 0.01:
-                if dist < 0.01:
+            if done:
+                # Check success using scenario's success criteria
+                if scenario.is_success(next_obs, done):
                     success_count += 1
                 break
         
         episode_rewards.append(total_reward)
-        episode_distances.append(min_dist)
+        episode_metrics.append(min_metric)
     
     # Save agent
     checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, f"stage_{{stage}}")
@@ -128,7 +130,7 @@ if __name__ == "__main__":
         'avg_reward': np.mean(episode_rewards),
         'max_reward': np.max(episode_rewards),
         'success_rate': success_count / {genetic_config.EPISODES_PER_STAGE},
-        'avg_final_distance': np.mean(episode_distances),
+        'avg_episode_metric': np.mean(episode_metrics),
     }}
     
     result_file = os.path.join(checkpoint_dir, f"agent_{{agent_id}}_results.json")
@@ -235,7 +237,7 @@ def rank_agents(results, metric='avg_reward'):
     elif metric == 'success_rate':
         return sorted(valid_results, key=lambda x: x.get('success_rate', 0), reverse=True)
     elif metric == 'final_distance':
-        return sorted(valid_results, key=lambda x: x.get('avg_final_distance', float('inf')), reverse=False)
+        return sorted(valid_results, key=lambda x: x.get('avg_episode_metric', float('inf')), reverse=False)
     else:
         return sorted(valid_results, key=lambda x: x.get('avg_reward', -float('inf')), reverse=True)
 
@@ -320,7 +322,7 @@ def main():
             print(f"    Avg Reward: {result.get('avg_reward', 0):.3f}")
             print(f"    Max Reward: {result.get('max_reward', 0):.3f}")
             print(f"    Success Rate: {result.get('success_rate', 0):.1%}")
-            print(f"    Avg Final Distance: {result.get('avg_final_distance', 0):.4f}")
+            print(f"    Avg Episode Metric: {result.get('avg_episode_metric', 0):.4f}")
         
         # Select top N
         top_agents = ranked_results[:genetic_config.TOP_N]

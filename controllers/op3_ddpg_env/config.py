@@ -15,11 +15,28 @@ JOINT_NAMES = [
 ]
 
 # Per-joint mechanical limits (Webots OP3)
+# Default limits for all joints (can be overridden per scenario)
 ANGLE_LIMITS = {
-    "ShoulderL": (-1.57, 1.57),
-    "ArmUpperL": (-1.57, 1.57),
     "ShoulderR": (-1.57, 1.57),
+    "ShoulderL": (-1.57, 1.57),
     "ArmUpperR": (-1.57, 1.57),
+    "ArmUpperL": (-1.57, 1.57),
+    "ArmLowerR": (-1.57, 1.57),
+    "ArmLowerL": (-1.57, 1.57),
+    "PelvYR": (-1.57, 1.57),
+    "PelvYL": (-1.57, 1.57),
+    "PelvR": (-1.57, 1.57),
+    "PelvL": (-1.57, 1.57),
+    "LegUpperR": (-1.57, 1.57),
+    "LegUpperL": (-1.57, 1.57),
+    "LegLowerR": (-1.57, 1.57),
+    "LegLowerL": (-1.57, 1.57),
+    "AnkleR": (-1.57, 1.57),
+    "AnkleL": (-1.57, 1.57),
+    "FootR": (-1.57, 1.57),
+    "FootL": (-1.57, 1.57),
+    "Neck": (-1.57, 1.57),
+    "Head": (-1.57, 1.57),
 }
 
 # ================== DDPG HYPERPARAMETERS ==================

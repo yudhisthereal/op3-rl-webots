@@ -20,6 +20,18 @@ import config
 import genetic_config
 from ddpg_agent import DDPG
 
+# Import all scenario classes to access scenario_name attribute
+from scenarios.arm_control_yudhis import ArmControlYudhis
+from scenarios.arm_control_pak_gembong import ArmControlPakGembong
+from scenarios.fall_control import FallControl
+
+# Map scenario class names to classes
+SCENARIO_CLASSES = {
+    'ArmControlYudhis': ArmControlYudhis,
+    'ArmControlPakGembong': ArmControlPakGembong,
+    'FallControl': FallControl,
+}
+
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 WORLD_FILE = PROJECT_ROOT / "worlds" / "robotis_op3_train.wbt"
@@ -52,6 +64,15 @@ def find_webots():
     return None
 
 
+def get_scenario_name(scenario_class_name):
+    """Get scenario name from scenario class using scenario_name attribute."""
+    scenario_class = SCENARIO_CLASSES.get(scenario_class_name)
+    if scenario_class:
+        return scenario_class.scenario_name
+    else:
+        raise ValueError(f"Unknown scenario class: {scenario_class_name}")
+
+
 def launch_agent_webots(agent_id, stage, checkpoint_path, scenario_class_name):
     """
     Launch a single Webots instance to train one agent.
@@ -60,11 +81,14 @@ def launch_agent_webots(agent_id, stage, checkpoint_path, scenario_class_name):
     if not webots_path:
         raise RuntimeError("Webots not found. Set WEBOTS_HOME or add webots to PATH.")
     
+    # Get scenario name from scenario class
+    scenario_name = get_scenario_name(scenario_class_name)
+    
     # Set environment variables for the agent
     env = os.environ.copy()
     env['AGENT_ID'] = str(agent_id)
     env['STAGE'] = str(stage)
-    env['SCENARIO_NAME'] = scenario_class_name.lower()
+    env['SCENARIO_NAME'] = scenario_name
     if checkpoint_path:
         env['CHECKPOINT_PATH'] = str(checkpoint_path)
     else:
@@ -109,9 +133,10 @@ def launch_agent_webots(agent_id, stage, checkpoint_path, scenario_class_name):
             backup_path.unlink()
         
         # Load results (with scenario name in path)
-        scenario_name = scenario_class_name.lower()
+        scenario_name = get_scenario_name(scenario_class_name)
         checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, scenario_name, f"stage_{stage}")
         result_file = os.path.join(checkpoint_dir, f"agent_{agent_id}_results.json")
+        print(f"Result file: {result_file}")
         
         if os.path.exists(result_file):
             with open(result_file, 'r') as f:
@@ -148,7 +173,7 @@ def rank_agents(results, metric='avg_reward'):
     elif metric == 'success_rate':
         return sorted(valid_results, key=lambda x: x.get('success_rate', 0), reverse=True)
     elif metric == 'final_distance':
-        return sorted(valid_results, key=lambda x: x.get('avg_final_distance', float('inf')), reverse=False)
+        return sorted(valid_results, key=lambda x: x.get('avg_episode_metric', float('inf')), reverse=False)
     else:
         return sorted(valid_results, key=lambda x: x.get('avg_reward', -float('inf')), reverse=True)
 
@@ -157,7 +182,7 @@ def reproduce_population(top_agents, population_size, stage, scenario_class_name
     """Create new population from top performers."""
     new_checkpoints = []
     num_elites = len(top_agents)
-    scenario_name = scenario_class_name.lower()
+    scenario_name = get_scenario_name(scenario_class_name)
     
     for i in range(population_size):
         # Select parent
@@ -238,7 +263,7 @@ def main():
                 print(f"    Avg Reward: {result.get('avg_reward', 0):.3f}")
                 print(f"    Max Reward: {result.get('max_reward', 0):.3f}")
                 print(f"    Success Rate: {result.get('success_rate', 0):.1%}")
-                print(f"    Avg Final Distance: {result.get('avg_final_distance', 0):.4f}")
+                print(f"    Avg Episode Metric: {result.get('avg_episode_metric', 0):.4f}")
         
         # Select top N (filter out errors)
         top_agents = [r for r in ranked_results[:genetic_config.TOP_N] if 'error' not in r]
@@ -249,7 +274,7 @@ def main():
         
         # Save best agent (with scenario name in path)
         best_agent = top_agents[0]
-        scenario_name = scenario_class_name.lower()
+        scenario_name = get_scenario_name(scenario_class_name)
         checkpoint_base_dir = os.path.join(config.CHECKPOINT_DIR, scenario_name)
         os.makedirs(checkpoint_base_dir, exist_ok=True)
         best_checkpoint = os.path.join(checkpoint_base_dir, f"best_stage_{stage}.pt")
@@ -268,7 +293,7 @@ def main():
             print(f"✅ Created {len(current_checkpoints)} new agents")
     
     # Final best agent (with scenario name in path)
-    scenario_name = scenario_class_name.lower()
+    scenario_name = get_scenario_name(scenario_class_name)
     checkpoint_base_dir = os.path.join(config.CHECKPOINT_DIR, scenario_name)
     final_best = os.path.join(checkpoint_base_dir, f"best_stage_{genetic_config.NUM_STAGES}.pt")
     final_checkpoint = os.path.join(checkpoint_base_dir, config.CHECKPOINT_NAME)

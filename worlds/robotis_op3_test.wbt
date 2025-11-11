@@ -17,7 +17,6 @@ WorldInfo {
 Viewpoint {
   orientation -0.1342598473038301 0.07003308124870958 0.9884683408854144 2.1894804722726673
   position 2.7847688168910354 -3.3882450458820355 1.6449259043593794
-  follow "ROBOTIS OP3"
 }
 TexturedBackground {
   texture "stadium_dry"
@@ -41,6 +40,7 @@ RobotisOp3 {
   cameraHeight 720
   bodySlot [
     InertialUnit {
+      name "InertialUnit"
       translation 0 0.01 0.09
     }
   ]

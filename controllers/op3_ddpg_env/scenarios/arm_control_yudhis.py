@@ -10,6 +10,8 @@ import config
 class ArmControlYudhis(BaseScenario):
     """Arm control scenario with Yudhis's reward function."""
     
+    scenario_name = 'yudhis'
+    
     def __init__(self, robot, timestep=32):
         self.CONTROL_JOINTS = ["ShoulderL", "ArmUpperL"]
         self.TARGET = np.array([1.57, -1.57], dtype=np.float32)
@@ -93,4 +95,15 @@ class ArmControlYudhis(BaseScenario):
             reward += 5.0
         
         return reward, done
+    
+    def get_episode_metric(self, obs):
+        """Get distance to target for tracking."""
+        return np.linalg.norm(obs - self.TARGET)
+    
+    def is_success(self, obs, done):
+        """Check if target is reached (distance < 0.01)."""
+        if not done:
+            return False
+        dist = np.linalg.norm(obs - self.TARGET)
+        return dist < 0.01
 

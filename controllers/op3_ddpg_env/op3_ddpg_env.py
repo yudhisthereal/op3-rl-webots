@@ -11,16 +11,20 @@ import genetic_config
 from ddpg_agent import DDPG
 
 # ================== SCENARIO SELECTION ==================
+# This section is automatically updated by main.py
 from scenarios.arm_control_yudhis import ArmControlYudhis
 # from scenarios.arm_control_pak_gembong import ArmControlPakGembong
+# from scenarios.fall_control import FallControl
 
 SCENARIO_CLASS = ArmControlYudhis
 # SCENARIO_CLASS = ArmControlPakGembong
+# SCENARIO_CLASS = FallControl
 
 # ================== GET AGENT INFO FROM ENVIRONMENT ==================
 AGENT_ID = int(os.environ.get('AGENT_ID', '0'))
 STAGE = int(os.environ.get('STAGE', '1'))
 CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', None)
+SCENARIO_NAME = os.environ.get('SCENARIO_NAME', 'default')
 
 if __name__ == "__main__":
     robot = Supervisor()
@@ -40,13 +44,13 @@ if __name__ == "__main__":
     
     # Training loop
     episode_rewards = []
-    episode_distances = []
+    episode_metrics = []  # Generic metric tracking (distance, acceleration, etc.)
     success_count = 0
     
     for ep in range(1, genetic_config.EPISODES_PER_STAGE + 1):
         obs = scenario.reset()
         total_reward = 0.0
-        min_dist = float('inf')
+        min_metric = float('inf')
         
         for step in range(config.MAX_STEPS):
             action = agent.get_action(obs, add_noise=True)
@@ -58,26 +62,32 @@ if __name__ == "__main__":
             agent.store((obs, action, reward, next_obs, float(done)))
             agent.update()
             
-            dist = np.linalg.norm(next_obs - scenario.TARGET)
-            min_dist = min(min_dist, dist)
+            # Get episode metric from scenario (e.g., distance to target, acceleration)
+            metric = scenario.get_episode_metric(next_obs)
+            min_metric = min(min_metric, metric)
             
             obs = next_obs
             total_reward += reward
             
-            if done or dist < 0.01:
-                if dist < 0.01:
+            if done:
+                # Check success using scenario's success criteria
+                if scenario.is_success(next_obs, done):
                     success_count += 1
                 break
         
         episode_rewards.append(total_reward)
-        episode_distances.append(min_dist)
+        episode_metrics.append(min_metric)
         
         if ep % 10 == 0:
             print(f"Agent {AGENT_ID} | Ep {ep}/{genetic_config.EPISODES_PER_STAGE} | "
                   f"Avg Reward: {np.mean(episode_rewards[-10:]):.3f}")
     
-    # Save agent
-    checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, f"stage_{STAGE}")
+    # Save agent (with scenario name in path)
+    # Use scenario_name from scenario class
+    scenario_name = SCENARIO_CLASS.scenario_name
+    
+    checkpoint_base_dir = os.path.join(config.CHECKPOINT_DIR, scenario_name)
+    checkpoint_dir = os.path.join(checkpoint_base_dir, f"stage_{STAGE}")
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_path = os.path.join(checkpoint_dir, f"agent_{AGENT_ID}.pt")
     agent.save(checkpoint_path)
@@ -89,7 +99,7 @@ if __name__ == "__main__":
         'avg_reward': float(np.mean(episode_rewards)),
         'max_reward': float(np.max(episode_rewards)),
         'success_rate': float(success_count / genetic_config.EPISODES_PER_STAGE),
-        'avg_final_distance': float(np.mean(episode_distances)),
+        'avg_episode_metric': float(np.mean(episode_metrics)),
     }
     
     import json
@@ -100,4 +110,8 @@ if __name__ == "__main__":
     print(f"Agent {AGENT_ID} completed!")
     print(f"  Avg Reward: {results['avg_reward']:.3f}")
     print(f"  Success Rate: {results['success_rate']:.1%}")
+    
+    # Exit Webots automatically
+    print(f"Agent {AGENT_ID} exiting Webots...")
+    robot.simulationQuit(0)
 

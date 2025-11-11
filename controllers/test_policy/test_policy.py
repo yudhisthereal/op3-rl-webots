@@ -15,11 +15,13 @@ import config
 from ddpg_agent import DDPG
 from scenarios.arm_control_yudhis import ArmControlYudhis
 # from scenarios.arm_control_pak_gembong import ArmControlPakGembong
+# from scenarios.fall_control import FallControl
 
 # ================== SCENARIO SELECTION ==================
 # Should match the scenario used during training
 # SCENARIO_CLASS = ArmControlPakGembong
 SCENARIO_CLASS = ArmControlYudhis
+# SCENARIO_CLASS = FallControl
 
 NUM_TEST_EPISODES = 5
 
@@ -48,15 +50,8 @@ if checkpoint_arg:
         )
 else:
     # Default: try scenario-specific checkpoint first, then fallback to default
-    # Extract scenario name from class name (e.g., "ArmControlYudhis" -> "yudhis")
-    scenario_class_name = SCENARIO_CLASS.__name__
-    if 'Yudhis' in scenario_class_name:
-        scenario_name = 'yudhis'
-    elif 'PakGembong' in scenario_class_name or 'Gembong' in scenario_class_name:
-        scenario_name = 'pak_gembong'
-    else:
-        # Fallback: convert to lowercase and remove common prefixes
-        scenario_name = scenario_class_name.lower().replace('armcontrol', '').replace('control', '')
+    # Use scenario_name from scenario class
+    scenario_name = SCENARIO_CLASS.scenario_name
     
     scenario_checkpoint = os.path.join(
         os.path.dirname(__file__), '..', 'op3_ddpg_env',
