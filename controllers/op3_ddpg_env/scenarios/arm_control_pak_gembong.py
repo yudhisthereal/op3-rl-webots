@@ -85,7 +85,14 @@ class ArmControlPakGembong(BaseScenario):
         Returns:
             reward: Scalar reward
             done: Boolean indicating if episode is done
+            termination_reason: String describing why episode ended (or None if not done)
         """
+        # Check for self-collision first
+        has_collision, collision_info = self.check_self_collision()
+        if has_collision:
+            print(f"Self-collision detected: {collision_info}")
+            return -100.0, True, collision_info
+        
         reward = -0.1
         
         dist = np.linalg.norm(next_obs - self.TARGET)
@@ -99,12 +106,15 @@ class ArmControlPakGembong(BaseScenario):
         
         # Check if done
         done = (next_obs == self.TARGET).all() or step >= config.MAX_STEPS
+        termination_reason = None
         
-        # Success reward
         if (next_obs == self.TARGET).all():
             reward = 1.0
+            termination_reason = "target_reached"
+        elif step >= config.MAX_STEPS:
+            termination_reason = "max_steps"
         
-        return reward, done
+        return reward, done, termination_reason
     
     def get_episode_metric(self, obs):
         """Get distance to target for tracking."""

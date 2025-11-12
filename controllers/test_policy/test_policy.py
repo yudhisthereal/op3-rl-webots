@@ -105,7 +105,7 @@ for ep in range(1, NUM_TEST_EPISODES + 1):
         next_obs = scenario.get_observation()
         
         # Compute reward and check if done
-        reward, done = scenario.compute_reward(obs, action, next_obs, step + 1)
+        reward, done, _ = scenario.compute_reward(obs, action, next_obs, step + 1)
         
         # Compute distance to target for logging
         dist = np.linalg.norm(next_obs - scenario.TARGET)

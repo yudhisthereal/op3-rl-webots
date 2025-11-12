@@ -2,10 +2,10 @@
 # Configuration for genetic algorithm multi-agent training
 
 # ================== GENETIC ALGORITHM CONFIG ==================
-POPULATION_SIZE = 2  # Number of agents in population
-TOP_N = 1  # Number of top performers to reproduce from
+POPULATION_SIZE = 4  # Number of agents in population
+TOP_N = 2  # Number of top performers to reproduce from
 NUM_STAGES = 5  # Number of training stages
-EPISODES_PER_STAGE = 50  # Episodes per agent per stage
+EPISODES_PER_STAGE = 10000  # Episodes per agent per stage
 
 # ================== REPRODUCTION CONFIG ==================
 MUTATION_RATE = 0.1  # Probability of mutating each parameter during reproduction

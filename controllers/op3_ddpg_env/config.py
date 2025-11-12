@@ -52,3 +52,7 @@ EXPLORATION_NOISE = 0.1
 CHECKPOINT_DIR = "checkpoints"
 CHECKPOINT_NAME = "ddpg_model.pt"
 
+# ================== SAFETY / COLLISION HEURISTICS ==================
+# Threshold above which a joint angle is considered "extreme" for self-collision heuristics
+EXTREME_JOINT_ANGLE_THRESHOLD = 2.0
+

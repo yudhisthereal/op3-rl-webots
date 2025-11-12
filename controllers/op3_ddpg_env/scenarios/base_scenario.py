@@ -3,6 +3,7 @@
 
 from abc import ABC, abstractmethod
 import numpy as np
+import config
 
 
 class BaseScenario(ABC):
@@ -10,6 +11,7 @@ class BaseScenario(ABC):
     
     # Each scenario must define its scenario_name as a class attribute
     scenario_name = None  # Override in subclasses
+    provides_acceleration = False  # Override in subclasses if acceleration data available
     
     def __init__(self, robot, timestep=32):
         """
@@ -22,6 +24,7 @@ class BaseScenario(ABC):
         self.robot = robot
         self.timestep = timestep
         self.episode_step = 0
+        self.robot_node = robot.getSelf() if hasattr(robot, 'getSelf') else None
         self._setup_environment()
     
     @abstractmethod
@@ -70,6 +73,64 @@ class BaseScenario(ABC):
         """
         pass
     
+    def check_self_collision(self):
+        """
+        Check if robot parts are colliding with each other (self-collision).
+        Uses multiple heuristics to detect impossible configurations that cause physics errors.
+        
+        Returns:
+            has_collision: Boolean indicating if self-collision detected
+            collision_info: String describing collision (or None)
+        """
+        if not self.robot_node:
+            return False, None
+        
+        try:
+            # Method 1: Check contact points (if available in Webots API)
+            try:
+                contact_points = self.robot_node.getContactPoints()
+                if contact_points and len(contact_points) > 6:
+                    # Excessive contact points often indicate self-collision
+                    return True, f"Excessive contact points ({len(contact_points)}), possible self-collision"
+            except:
+                # Contact points API might not be available or work differently
+                pass
+            
+            # Method 2: Check for extreme joint configurations
+            # If multiple joints are at their limits simultaneously, likely self-collision
+            if hasattr(self, 'sensors') and self.sensors:
+                extreme_joints = 0
+                for sensor in self.sensors:
+                    try:
+                        value = sensor.getValue()
+                        # Check if joint is at extreme position (near limits)
+                        if abs(value) > config.EXTREME_JOINT_ANGLE_THRESHOLD:
+                            extreme_joints += 1
+                    except:
+                        pass
+                
+                # If many joints are at extreme positions, likely self-collision
+                if extreme_joints >= 1:
+                    return True, f"Multiple joints at extreme positions ({extreme_joints}), possible self-collision"
+            
+            # Method 3: Check robot's velocity for sudden spikes (indicates physics error)
+            try:
+                velocity = self.robot_node.getVelocity()
+                if velocity and len(velocity) >= 3:
+                    linear_vel = np.array(velocity[:3])
+                    vel_magnitude = np.linalg.norm(linear_vel)
+                    # Sudden high velocity often indicates physics error from self-collision
+                    if vel_magnitude > 10.0:  # Unrealistic velocity
+                        return True, f"Unrealistic velocity detected ({vel_magnitude:.2f} m/s), possible physics error"
+            except:
+                pass
+            
+        except Exception as e:
+            # If all methods fail, return no collision
+            pass
+        
+        return False, None
+    
     @abstractmethod
     def compute_reward(self, obs, action, next_obs, step):
         """
@@ -84,6 +145,7 @@ class BaseScenario(ABC):
         Returns:
             reward: Scalar reward
             done: Boolean indicating if episode is done
+            termination_reason: String describing why episode ended (or None if not done)
         """
         pass
     

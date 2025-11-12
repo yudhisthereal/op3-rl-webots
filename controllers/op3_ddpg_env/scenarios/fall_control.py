@@ -11,6 +11,7 @@ class FallControl(BaseScenario):
     """Fall control scenario - minimize impact force during falls."""
     
     scenario_name = 'fall_control'
+    provides_acceleration = True
     
     def __init__(self, robot, timestep=32):
         self.CONTROL_JOINTS = config.JOINT_NAMES  # All 20 joints
@@ -235,7 +236,14 @@ class FallControl(BaseScenario):
         Returns:
             reward: Scalar reward
             done: Boolean indicating if episode is done
+            termination_reason: String describing why episode ended (or None if not done)
         """
+        # Check for self-collision first
+        has_collision, collision_info = self.check_self_collision()
+        if has_collision:
+            print(f"Self-collision detected: {collision_info}")
+            return -100.0, True, collision_info
+        
         # Extract acceleration from observation (last 3 elements)
         current_accel = next_obs[-3:]
         prev_accel = obs[-3:] if len(obs) >= 3 else np.zeros(3)
@@ -259,12 +267,18 @@ class FallControl(BaseScenario):
         # Check if done
         # Episode ends if acceleration is very high (hard impact) or max steps reached
         done = accel_magnitude > 50.0 or step >= config.MAX_STEPS
+        termination_reason = None
         
         # Large penalty for hard impact
         if accel_magnitude > 30.0:
             reward -= 10.0
         
-        return reward, done
+        if accel_magnitude > 50.0:
+            termination_reason = "hard_impact"
+        elif step >= config.MAX_STEPS:
+            termination_reason = "max_steps"
+        
+        return reward, done, termination_reason
     
     def get_episode_metric(self, obs):
         """Get acceleration magnitude for tracking (lower is better)."""

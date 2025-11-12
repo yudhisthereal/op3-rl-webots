@@ -9,6 +9,7 @@ import numpy as np
 import config
 import genetic_config
 from ddpg_agent import DDPG
+from plot_utils import generate_training_plots
 
 # ================== SCENARIO SELECTION ==================
 # from scenarios.arm_control_pak_gembong import ArmControlPakGembong
@@ -27,26 +28,93 @@ def train_agent(robot, scenario, agent, agent_id, stage, episodes):
     """
     episode_rewards = []
     episode_metrics = []  # Generic metric tracking (distance, acceleration, etc.)
+    episode_timesteps = []  # Track timesteps per episode
     success_count = 0
+    
+    # Data for last episode plots
+    last_episode_acceleration = []
+    last_episode_speed = []
+    last_episode_rewards = []
+    last_episode_timesteps = []
     
     for ep in range(1, episodes + 1):
         obs = scenario.reset()
         total_reward = 0.0
         min_metric = float('inf')
         
+        # Track data for last episode
+        is_last_episode = (ep == episodes)
+        if is_last_episode:
+            last_episode_acceleration = []
+            last_episode_speed = []
+            last_episode_rewards = []
+            last_episode_timesteps = []
+        
         for step in range(config.MAX_STEPS):
             action = agent.get_action(obs, add_noise=True)
             scenario.apply_action(action)
             scenario.step()
             next_obs = scenario.get_observation()
-            reward, done = scenario.compute_reward(obs, action, next_obs, step + 1)
+            reward, done, termination_reason = scenario.compute_reward(obs, action, next_obs, step + 1)
             
             agent.store((obs, action, reward, next_obs, float(done)))
+            
+            # Log termination reason if episode ended
+            if done and termination_reason:
+                if termination_reason.startswith("Self-collision"):
+                    print(f"Ep {ep} | {termination_reason}")
             agent.update()
             
             # Get episode metric from scenario (e.g., distance to target, acceleration)
             metric = scenario.get_episode_metric(next_obs)
             min_metric = min(min_metric, metric)
+            
+            # Track data for last episode
+        if is_last_episode:
+                last_episode_rewards.append(reward)
+                last_episode_timesteps.append(step + 1)
+                
+                # Get acceleration and speed
+            if scenario.provides_acceleration and hasattr(scenario, 'robot_node') and scenario.robot_node:
+                    try:
+                        # Get acceleration
+                        accel_magnitude = 0.0
+                        if len(next_obs) > scenario.get_act_dim():
+                            accel = next_obs[-3:]
+                            accel_magnitude = np.linalg.norm(accel)
+                        elif hasattr(scenario, 'accelerometer') and scenario.accelerometer:
+                            try:
+                                accel = scenario.accelerometer.getValues()
+                                accel_magnitude = np.linalg.norm(accel)
+                            except:
+                                pass
+                        if accel_magnitude == 0.0 and hasattr(scenario, 'prev_velocity') and scenario.prev_velocity is not None:
+                            try:
+                                velocity = scenario.robot_node.getVelocity()
+                                if velocity and len(velocity) >= 3:
+                                    current_velocity = np.array(velocity[:3])
+                                    dt = config.TIMESTEP / 1000.0
+                                    if dt > 0:
+                                        accel_est = (current_velocity - scenario.prev_velocity) / dt
+                                        accel_magnitude = np.linalg.norm(accel_est)
+                            except:
+                                pass
+                        last_episode_acceleration.append(accel_magnitude)
+                        
+                        # Get speed
+                        try:
+                            velocity = scenario.robot_node.getVelocity()
+                            if velocity and len(velocity) >= 3:
+                                linear_vel = np.array(velocity[:3])
+                                speed = np.linalg.norm(linear_vel)
+                                last_episode_speed.append(speed)
+                            else:
+                                last_episode_speed.append(0.0)
+                        except:
+                            last_episode_speed.append(0.0)
+                    except:
+                        last_episode_acceleration.append(0.0)
+                        last_episode_speed.append(0.0)
             
             obs = next_obs
             total_reward += reward
@@ -59,6 +127,7 @@ def train_agent(robot, scenario, agent, agent_id, stage, episodes):
         
         episode_rewards.append(total_reward)
         episode_metrics.append(min_metric)
+        episode_timesteps.append(step + 1)
         
         # Progress update every 10 episodes
         if ep % 10 == 0:
@@ -72,6 +141,11 @@ def train_agent(robot, scenario, agent, agent_id, stage, episodes):
         'success_rate': success_count / episodes,
         'avg_episode_metric': np.mean(episode_metrics),
         'episode_rewards': episode_rewards,
+        'episode_timesteps': episode_timesteps,
+        'last_episode_acceleration': last_episode_acceleration,
+        'last_episode_speed': last_episode_speed,
+        'last_episode_rewards': last_episode_rewards,
+        'last_episode_timesteps': last_episode_timesteps,
     }
 
 
@@ -128,11 +202,29 @@ if __name__ == "__main__":
             )
             
             # Save agent checkpoint
-            checkpoint_dir = os.path.join(config.CHECKPOINT_DIR, f"stage_{stage}")
+            scenario_name = SCENARIO_CLASS.scenario_name
+            checkpoint_base_dir = os.path.join(config.CHECKPOINT_DIR, scenario_name)
+            checkpoint_dir = os.path.join(checkpoint_base_dir, f"stage_{stage}")
             os.makedirs(checkpoint_dir, exist_ok=True)
             checkpoint_path = os.path.join(checkpoint_dir, f"agent_{agent_id}.pt")
             agent.save(checkpoint_path)
             result['checkpoint_path'] = checkpoint_path
+            
+            # Generate plots for this agent
+            plots_dir = os.path.join(checkpoint_dir, 'plots')
+            generate_training_plots(
+                episode_rewards=result['episode_rewards'],
+                episode_timesteps=result['episode_timesteps'],
+                last_episode_acceleration=result['last_episode_acceleration'],
+                last_episode_speed=result['last_episode_speed'],
+                last_episode_rewards=result['last_episode_rewards'],
+                last_episode_timesteps=result['last_episode_timesteps'],
+                plots_dir=plots_dir,
+                agent_id=agent_id,
+                stage=stage,
+                window_size=10,
+                include_accel_speed=scenario.provides_acceleration
+            )
             
             results.append(result)
         
