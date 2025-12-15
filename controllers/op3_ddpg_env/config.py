@@ -10,8 +10,8 @@ MAX_EPISODES = 300
 JOINT_NAMES = [
     "ShoulderR", "ShoulderL", "ArmUpperR", "ArmUpperL", "ArmLowerR",
     "ArmLowerL", "PelvYR", "PelvYL", "PelvR", "PelvL",
-    "LegUpperR", "LegUpperL", "LegLowerR", "LegLowerL", "AnkleR",
-    "AnkleL", "FootR", "FootL", "Neck", "Head"
+    "LegUpperR", "LegUpperL", "LegLowerR", "LegLowerL",
+    # "AnkleR", "AnkleL", "FootR", "FootL", "Neck", "Head"
 ]
 
 # Per-joint mechanical limits (Webots OP3)

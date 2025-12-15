@@ -7,6 +7,7 @@ Usage:
     python main.py --train --scenario=yudhis
     python main.py --test --scenario=yudhis
     python main.py --test --scenario=yudhis --checkpoint=ddpg_model.pt
+    python main.py --angle_check  # NEW: Manual joint angle testing mode
 """
 
 import argparse
@@ -26,11 +27,20 @@ except ImportError:
 # Project paths
 PROJECT_ROOT = Path(__file__).parent
 CONTROLLERS_DIR = PROJECT_ROOT / "controllers"
+
+# Training/test controllers
 TRAIN_CONTROLLER = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_env.py"
 GENETIC_CONTROLLER = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_genetic.py"
 TEST_CONTROLLER = CONTROLLERS_DIR / "test_policy" / "test_policy.py"
+
+# Angle check mode (NEW)
+ANGLE_CHECK_DIR = CONTROLLERS_DIR / "angle_check"
+ANGLE_CHECK_CONTROLLER = ANGLE_CHECK_DIR / "angle_check.py"
+
+# World files
 TRAIN_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_train.wbt"
 TEST_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_test.wbt"
+ANGLE_CHECK_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_angle_check.wbt"  # NEW
 
 # Scenario mappings
 SCENARIOS = {
@@ -294,6 +304,33 @@ def launch_webots(world_file, mode="fast", env=None):
         sys.exit(0)
 
 
+def validate_angle_check_setup():
+    """Validate that angle check mode is properly set up."""
+    if not ANGLE_CHECK_CONTROLLER.exists():
+        print(f"❌ Angle check controller not found: {ANGLE_CHECK_CONTROLLER}")
+        print("Please ensure the controller file exists in controllers/angle_check/")
+        return False
+    
+    if not ANGLE_CHECK_WORLD.exists():
+        print(f"❌ Angle check world file not found: {ANGLE_CHECK_WORLD}")
+        print("Please ensure the world file exists in worlds/")
+        return False
+    
+    # Check world file references the correct controller
+    try:
+        with open(ANGLE_CHECK_WORLD, 'r') as f:
+            world_content = f.read()
+        
+        # Check if controller is set to "angle_check"
+        if 'controller "angle_check"' not in world_content:
+            print(f"⚠️  Warning: World file {ANGLE_CHECK_WORLD.name} might not reference 'angle_check' controller")
+            print("   The world file should contain: controller \"angle_check\"")
+    except:
+        pass
+    
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Launch Webots training or testing with different scenarios",
@@ -306,6 +343,7 @@ Examples:
   python main.py --genetic --scenario=yudhis
   python main.py --test --scenario=yudhis
   python main.py --test --scenario=yudhis --checkpoint=ddpg_model.pt
+  python main.py --angle_check  # NEW: Manual joint angle testing mode
         """
     )
     
@@ -314,14 +352,15 @@ Examples:
     mode_group.add_argument('--train', action='store_true', help='Run training mode')
     mode_group.add_argument('--genetic', action='store_true', help='Run genetic algorithm multi-agent training')
     mode_group.add_argument('--test', action='store_true', help='Run testing mode')
+    mode_group.add_argument('--angle_check', action='store_true', help='NEW: Manual joint angle testing mode')
     
-    # Scenario selection
+    # Scenario selection (not needed for angle_check)
     parser.add_argument(
         '--scenario',
         type=str,
-        required=True,
-        choices=list(SCENARIOS.keys()),
-        help='Scenario to use (pak_gembong or yudhis)'
+        default=None,
+        choices=list(SCENARIOS.keys()) + [None],
+        help='Scenario to use (not needed for --angle_check)'
     )
     
     # Checkpoint (for test mode)
@@ -334,6 +373,20 @@ Examples:
     
     args = parser.parse_args()
     
+    # Validate arguments
+    if args.angle_check:
+        # angle_check doesn't need scenario
+        if args.scenario:
+            print("⚠️  Warning: --scenario is ignored in --angle_check mode")
+        
+        # Validate setup
+        if not validate_angle_check_setup():
+            sys.exit(1)
+    else:
+        # Other modes require scenario
+        if not args.scenario:
+            parser.error("--scenario is required for --train, --genetic, or --test modes")
+    
     # Validate checkpoint for test mode
     if args.test and args.checkpoint:
         checkpoint_path = CONTROLLERS_DIR / "op3_ddpg_env" / "checkpoints" / args.checkpoint
@@ -342,7 +395,50 @@ Examples:
             print("Continuing anyway...")
     
     try:
-        if args.train:
+        if args.angle_check:
+            print("🔧 Setting up joint angle check mode...")
+            print(f"📁 Controller: {ANGLE_CHECK_CONTROLLER}")
+            print(f"🌍 World file: {ANGLE_CHECK_WORLD}")
+            
+            print("\n" + "=" * 70)
+            print("🤖 OP3 JOINT ANGLE CHECK MODE")
+            print("=" * 70)
+            print("INSTRUCTIONS:")
+            print("1. Webots will start with OP3 robot")
+            print("2. Switch to the Webots console (usually bottom panel)")
+            print("3. Type commands to control joints:")
+            print()
+            print("   📋 Available commands:")
+            print("     set <joint_index> <angle_rad>  - Set joint to angle")
+            print("     setall <angle_rad>             - Set ALL joints to same angle")
+            print("     setgroup <indices> <angle>     - Set multiple joints")
+            print("     reset                          - Reset all joints to 0 rad")
+            print("     preset <name>                  - Apply preset pose")
+            print("     list                           - List current joint angles")
+            print("     help                           - Show command list")
+            print("     quit                           - Exit program")
+            print()
+            print("   💡 Preset poses: standing, fall_forward, fall_backward,")
+            print("                   fall_right, fall_left, arms_up, crouch")
+            print()
+            print("   📊 Joint indices (0-19):")
+            print("     0: ShoulderR   1: ShoulderL")
+            print("     2: ArmUpperR   3: ArmUpperL")
+            print("     4: ArmLowerR   5: ArmLowerL")
+            print("     6: PelvYR      7: PelvYL")
+            print("     8: PelvR       9: PelvL")
+            print("     10: LegUpperR  11: LegUpperL")
+            print("     12: LegLowerR  13: LegLowerL")
+            print("     14: AnkleR     15: AnkleL")
+            print("     16: FootR      17: FootL")
+            print("     18: Neck       19: Head")
+            print("=" * 70)
+            print("🎮 Launching Webots...")
+            
+            # Launch Webots with angle check world
+            launch_webots(ANGLE_CHECK_WORLD, mode="run")
+            
+        elif args.train:
             print(f"📝 Setting up training with scenario: {args.scenario}")
             update_scenario_in_file(TRAIN_CONTROLLER, args.scenario)
             print(f"✅ Updated {TRAIN_CONTROLLER}")
@@ -399,7 +495,7 @@ Examples:
                     pass
             
             print(f"🎮 Launching test world...")
-            launch_webots(TEST_WORLD, mode="fast", env=env)
+            launch_webots(TEST_WORLD, mode="normal", env=env)
             
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -410,4 +506,3 @@ Examples:
 
 if __name__ == "__main__":
     main()
-

@@ -13,15 +13,15 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'op3_ddpg_env'))
 # Import directly from files (not as package) to avoid executing op3_ddpg_env.py
 import config
 from ddpg_agent import DDPG
-from scenarios.arm_control_yudhis import ArmControlYudhis
+# from scenarios.arm_control_yudhis import ArmControlYudhis
 # from scenarios.arm_control_pak_gembong import ArmControlPakGembong
-# from scenarios.fall_control import FallControl
+from scenarios.fall_control import FallControl
 
 # ================== SCENARIO SELECTION ==================
 # Should match the scenario used during training
 # SCENARIO_CLASS = ArmControlPakGembong
-SCENARIO_CLASS = ArmControlYudhis
-# SCENARIO_CLASS = FallControl
+# SCENARIO_CLASS = ArmControlYudhis
+SCENARIO_CLASS = FallControl
 
 NUM_TEST_EPISODES = 5
 
@@ -83,7 +83,8 @@ agent.actor.eval()  # Set to evaluation mode
 print("✅ Model loaded successfully!")
 print(f"Testing policy for {NUM_TEST_EPISODES} episodes...")
 print(f"Scenario: {SCENARIO_CLASS.__name__}")
-print(f"Target angles: {scenario.TARGET}")
+if hasattr(scenario, 'TARGET'):
+    print(f"Target angles: {scenario.TARGET}")
 print("-" * 60)
 
 # ================== TEST LOOP ==================
@@ -91,7 +92,6 @@ for ep in range(1, NUM_TEST_EPISODES + 1):
     # Reset environment at the start of each episode
     obs = scenario.reset()
     total_reward = 0.0
-    min_dist = float('inf')
     
     for step in range(config.MAX_STEPS):
         # Get action from trained policy (no exploration noise)
@@ -107,25 +107,12 @@ for ep in range(1, NUM_TEST_EPISODES + 1):
         # Compute reward and check if done
         reward, done, _ = scenario.compute_reward(obs, action, next_obs, step + 1)
         
-        # Compute distance to target for logging
-        dist = np.linalg.norm(next_obs - scenario.TARGET)
-        min_dist = min(min_dist, dist)
-        
         total_reward += reward
         obs = next_obs
         
-        # Check if target reached
-        if done or dist < 0.01:
-            success_msg = " | ✅ SUCCESS" if dist < 0.01 else ""
-            print(f"Episode {ep}/{NUM_TEST_EPISODES} | Steps: {step+1:3d} | "
-                  f"Final angles: [{next_obs[0]:6.3f}, {next_obs[1]:6.3f}] | "
-                  f"Distance: {dist:.4f}{success_msg}")
-            break
-    
-    if dist >= 0.01 and not done:
-        print(f"Episode {ep}/{NUM_TEST_EPISODES} | Steps: {step+1:3d} | "
-              f"Final angles: [{obs[0]:6.3f}, {obs[1]:6.3f}] | "
-              f"Min distance: {min_dist:.4f} | Total reward: {total_reward:.3f}")
+    print(f"Episode {ep}/{NUM_TEST_EPISODES} | Steps: {step+1:3d} | "
+            f"Final obs: [{obs[0]:6.3f}, {obs[1]:6.3f}] | "
+            f"Total reward: {total_reward:.3f}")
     
     # Small pause between episodes
     for _ in range(10):

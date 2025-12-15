@@ -13,13 +13,13 @@ from plot_utils import generate_training_plots
 
 # ================== SCENARIO SELECTION ==================
 # This section is automatically updated by main.py
-from scenarios.arm_control_yudhis import ArmControlYudhis
+# from scenarios.arm_control_yudhis import ArmControlYudhis
 # from scenarios.arm_control_pak_gembong import ArmControlPakGembong
-# from scenarios.fall_control import FallControl
+from scenarios.fall_control import FallControl
 
-SCENARIO_CLASS = ArmControlYudhis
+# SCENARIO_CLASS = ArmControlYudhis
 # SCENARIO_CLASS = ArmControlPakGembong
-# SCENARIO_CLASS = FallControl
+SCENARIO_CLASS = FallControl
 
 # ================== GET AGENT INFO FROM ENVIRONMENT ==================
 AGENT_ID = int(os.environ.get('AGENT_ID', '0'))
@@ -92,7 +92,7 @@ if __name__ == "__main__":
                 last_episode_rewards.append(reward)
                 last_episode_timesteps.append(step + 1)
                 
-                # Get acceleration and speed if scenario provides it
+                # Get acceleration and speed
                 if scenario.provides_acceleration and hasattr(scenario, 'robot_node') and scenario.robot_node:
                     try:
                         # Get acceleration
