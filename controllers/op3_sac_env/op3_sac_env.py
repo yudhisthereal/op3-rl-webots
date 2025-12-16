@@ -3,6 +3,7 @@
 
 from controller import Supervisor
 import time
+import sys
 import os
 import numpy as np
 import torch
@@ -10,6 +11,11 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import config
+
+CONTROLLER_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CONTROLLER_DIR, '..', '..'))
+sys.path.insert(0, PROJECT_ROOT)
+
 
 # ================== SCENARIO SELECTION ==================
 # This section is automatically updated by main.py
@@ -251,7 +257,7 @@ class SACAgent:
 # ================== MAIN TRAINING LOOP ==================
 if __name__ == "__main__":
     robot = Supervisor()
-    scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP)
+    scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP, algorithm='sac')
     
     # Create agent
     agent = SACAgent(

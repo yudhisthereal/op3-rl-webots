@@ -1,22 +1,31 @@
-# op3_ppo_env.py
-# Webots controller for PPO (Proximal Policy Optimization) training
+#!/usr/bin/env python3
+"""
+PPO training controller for Webots with plotting.
+"""
 
 from controller import Supervisor
-import time
-import os
 import numpy as np
+import os
+import sys
+import time
+import json
+import matplotlib.pyplot as plt
+
+# Add project root to path
+CONTROLLER_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CONTROLLER_DIR, '..', '..'))
+sys.path.insert(0, PROJECT_ROOT)
+
+from scenarios.fall_control import FallControl
+import config
+
+# PPO Agent implementation
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import config
+import torch.nn.functional as F
 
-# ================== SCENARIO SELECTION ==================
-# This section is automatically updated by main.py
-from scenarios.fall_control import FallControl
 
-SCENARIO_CLASS = FallControl
-
-# ================== PPO AGENT IMPLEMENTATION ==================
 class PPOActor(nn.Module):
     """Actor network for PPO."""
     def __init__(self, obs_dim, act_dim):
@@ -35,6 +44,7 @@ class PPOActor(nn.Module):
         mean = self.net(x)
         return mean, self.log_std.expand_as(mean)
 
+
 class PPOCritic(nn.Module):
     """Critic network for PPO."""
     def __init__(self, obs_dim):
@@ -49,6 +59,7 @@ class PPOCritic(nn.Module):
     
     def forward(self, x):
         return self.net(x)
+
 
 class PPOAgent:
     """PPO agent implementation."""
@@ -88,7 +99,7 @@ class PPOAgent:
         else:
             dist = torch.distributions.Normal(mean, std)
             action = dist.sample()
-            action = torch.tanh(action)  # Ensure action is in [-1, 1]
+            action = torch.tanh(action)
         
         action = action.squeeze(0).cpu().numpy()
         return np.clip(action, -1.0, 1.0)
@@ -227,10 +238,77 @@ class PPOAgent:
         agent.critic.load_state_dict(checkpoint['critic_state_dict'])
         return agent
 
-# ================== MAIN TRAINING LOOP ==================
+
+def generate_training_plots(episode_rewards, episode_lengths, episode_errors, save_dir, window_size=10):
+    """Generate and save training plots."""
+    os.makedirs(save_dir, exist_ok=True)
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # Plot 1: Episode rewards
+    axes[0, 0].plot(episode_rewards, alpha=0.6, label='Raw')
+    if len(episode_rewards) >= window_size:
+        moving_avg = np.convolve(episode_rewards, np.ones(window_size)/window_size, mode='valid')
+        axes[0, 0].plot(range(window_size-1, len(episode_rewards)), moving_avg, 
+                       'r-', linewidth=2, label=f'{window_size}-episode moving avg')
+    axes[0, 0].set_xlabel('Episode')
+    axes[0, 0].set_ylabel('Reward')
+    axes[0, 0].set_title('Episode Rewards')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True)
+    
+    # Plot 2: Episode lengths
+    axes[0, 1].plot(episode_lengths, alpha=0.6)
+    axes[0, 1].set_xlabel('Episode')
+    axes[0, 1].set_ylabel('Steps')
+    axes[0, 1].set_title('Episode Lengths')
+    axes[0, 1].grid(True)
+    
+    # Plot 3: Cumulative reward
+    axes[1, 0].plot(np.cumsum(episode_rewards))
+    axes[1, 0].set_xlabel('Episode')
+    axes[1, 0].set_ylabel('Cumulative Reward')
+    axes[1, 0].set_title('Cumulative Reward')
+    axes[1, 0].grid(True)
+    
+    # Plot 4: Average joint error
+    if episode_errors:
+        axes[1, 1].plot(episode_errors, alpha=0.6)
+        axes[1, 1].set_xlabel('Episode')
+        axes[1, 1].set_ylabel('Average Joint Error (rad)')
+        axes[1, 1].set_title('Average Joint Error per Episode')
+        axes[1, 1].grid(True)
+    
+    plt.tight_layout()
+    
+    # Save plots
+    plot_path = os.path.join(save_dir, 'training_plots.png')
+    plt.savefig(plot_path, dpi=100)
+    plt.close()
+    
+    # Save data as JSON
+    data_path = os.path.join(save_dir, 'training_data.json')
+    with open(data_path, 'w') as f:
+        json.dump({
+            'episode_rewards': [float(r) for r in episode_rewards],
+            'episode_lengths': [int(l) for l in episode_lengths],
+            'episode_errors': [float(e) for e in episode_errors] if episode_errors else [],
+            'total_episodes': len(episode_rewards),
+            'total_steps': sum(episode_lengths),
+            'average_reward': float(np.mean(episode_rewards)),
+            'max_reward': float(np.max(episode_rewards)),
+            'min_reward': float(np.min(episode_rewards)),
+        }, f, indent=2)
+    
+    print(f"Training plots saved to: {plot_path}")
+    print(f"Training data saved to: {data_path}")
+
+
 if __name__ == "__main__":
     robot = Supervisor()
-    scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP)
+    
+    # Create scenario
+    scenario = FallControl(robot, timestep=config.TIMESTEP, algorithm='ppo')
     
     # Create agent
     agent = PPOAgent(
@@ -238,14 +316,27 @@ if __name__ == "__main__":
         act_dim=scenario.get_act_dim()
     )
     
-    print("Starting PPO training...")
+    print("=" * 70)
+    print("🤖 PPO TRAINING STARTED")
+    print("=" * 70)
+    print(f"Observation dimension: {scenario.get_obs_dim()}")
+    print(f"Action dimension: {scenario.get_act_dim()}")
+    print(f"Max episodes: {config.MAX_EPISODES}")
+    print(f"Max steps per episode: {config.MAX_STEPS}")
+    print(f"Checkpoint directory: {config.CHECKPOINT_DIR}")
+    print("=" * 70)
+    
+    # Training metrics
+    episode_rewards = []
+    episode_lengths = []
+    episode_errors = []
+    start_time = time.time()
     
     # Training loop
-    episode_rewards = []
-    
     for ep in range(1, config.MAX_EPISODES + 1):
         obs = scenario.reset()
         total_reward = 0.0
+        episode_joint_errors = []
         
         for step in range(config.MAX_STEPS):
             # Get action
@@ -262,32 +353,75 @@ if __name__ == "__main__":
             # Store transition
             agent.store_transition(obs, action, reward, next_obs, done)
             
+            # Track joint errors
+            current_joints = next_obs[:20]
+            for i, joint_name in enumerate(scenario.CONTROL_JOINTS[:20]):
+                current_pos = current_joints[i]
+                goal_pos = scenario.GOAL_POSITIONS.get(joint_name, 0.0)
+                episode_joint_errors.append(abs(current_pos - goal_pos))
+            
             total_reward += reward
             obs = next_obs
             
             if done:
+                if termination_reason:
+                    print(f"Episode {ep} terminated: {termination_reason}")
                 break
         
         # Update agent after episode
         agent.update()
         
+        # Calculate metrics
+        avg_joint_error = np.mean(episode_joint_errors) if episode_joint_errors else 0.0
+        
         episode_rewards.append(total_reward)
+        episode_lengths.append(step + 1)
+        episode_errors.append(avg_joint_error)
         
         # Print progress
         if ep % 10 == 0:
             avg_reward = np.mean(episode_rewards[-10:])
-            print(f"Episode {ep}/{config.MAX_EPISODES} | Avg Reward (last 10): {avg_reward:.3f}")
+            avg_length = np.mean(episode_lengths[-10:])
+            avg_error = np.mean(episode_errors[-10:]) if episode_errors else 0.0
+            elapsed_time = time.time() - start_time
+            
+            print(f"Episode {ep:4d}/{config.MAX_EPISODES} | "
+                  f"Reward: {total_reward:7.3f} (avg: {avg_reward:7.3f}) | "
+                  f"Steps: {step+1:4d} (avg: {avg_length:5.1f}) | "
+                  f"Avg Joint Error: {avg_error:.4f} | "
+                  f"Time: {elapsed_time/60:5.1f} min")
         
         # Save checkpoint periodically
-        if ep % 100 == 0:
+        if ep % 100 == 0 or ep == config.MAX_EPISODES:
             checkpoint_path = os.path.join(config.CHECKPOINT_DIR, f"ppo_checkpoint_ep{ep}.pt")
             agent.save(checkpoint_path)
-            print(f"Checkpoint saved: {checkpoint_path}")
+            
+            # Generate plots
+            plots_dir = os.path.join(config.CHECKPOINT_DIR, 'plots')
+            generate_training_plots(episode_rewards, episode_lengths, episode_errors, plots_dir)
+            
+            print(f"✅ Checkpoint saved: {checkpoint_path}")
     
     # Save final model
     final_path = os.path.join(config.CHECKPOINT_DIR, "ppo_final.pt")
     agent.save(final_path)
-    print(f"Final model saved: {final_path}")
+    
+    # Final plots
+    final_plots_dir = os.path.join(config.CHECKPOINT_DIR, 'final_plots')
+    generate_training_plots(episode_rewards, episode_lengths, episode_errors, final_plots_dir)
+    
+    # Training summary
+    total_time = time.time() - start_time
+    print("\n" + "=" * 70)
+    print("✅ PPO TRAINING COMPLETE")
+    print("=" * 70)
+    print(f"Total episodes: {len(episode_rewards)}")
+    print(f"Total steps: {sum(episode_lengths)}")
+    print(f"Total training time: {total_time/60:.1f} minutes")
+    print(f"Average reward: {np.mean(episode_rewards):.3f}")
+    print(f"Best episode reward: {np.max(episode_rewards):.3f}")
+    print(f"Final model saved to: {final_path}")
+    print("=" * 70)
     
     # Exit Webots
     robot.simulationQuit(0)

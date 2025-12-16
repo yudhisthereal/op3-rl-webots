@@ -3,7 +3,14 @@
 
 from abc import ABC, abstractmethod
 import numpy as np
-import config
+import sys
+import os
+
+# Add scenarios directory to path for base_scenario import
+SCENARIOS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCENARIOS_DIR)
+
+from scenarios import config
 
 
 class BaseScenario(ABC):

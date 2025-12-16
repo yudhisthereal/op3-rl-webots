@@ -29,7 +29,7 @@ SCENARIO_NAME = os.environ.get('SCENARIO_NAME', 'default')
 
 if __name__ == "__main__":
     robot = Supervisor()
-    scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP)
+    scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP, algorithm='ddpg')
     
     print(f"Agent {AGENT_ID} starting training (Stage {STAGE})...")
     

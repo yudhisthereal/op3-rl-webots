@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Main script to launch Webots training or testing with different scenarios.
+Main script to launch Webots training or testing with different scenarios and algorithms.
 
 Usage:
-    python main.py --train --scenario=pak_gembong
-    python main.py --train --scenario=yudhis
-    python main.py --test --scenario=yudhis
-    python main.py --test --scenario=yudhis --checkpoint=ddpg_model.pt
-    python main.py --angle_check  # NEW: Manual joint angle testing mode
+    python main.py --train --scenario=fall_control --alg=ddpg
+    python main.py --train --scenario=fall_control --alg=ppo
+    python main.py --train --scenario=fall_control --alg=sac
+    python main.py --test --scenario=fall_control --alg=ppo
+    python main.py --test --scenario=fall_control --alg=sac --checkpoint=sac_final.pt
+    python main.py --angle_check
 """
 
 import argparse
@@ -28,21 +29,45 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).parent
 CONTROLLERS_DIR = PROJECT_ROOT / "controllers"
 
-# Training/test controllers
-TRAIN_CONTROLLER = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_env.py"
-GENETIC_CONTROLLER = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_genetic.py"
-TEST_CONTROLLER = CONTROLLERS_DIR / "test_policy" / "test_policy.py"
+# Algorithm configurations
+ALGORITHMS = {
+    "ddpg": {
+        "controller_dir": "op3_ddpg_env",
+        "train_controller": "op3_ddpg_env.py",
+        "genetic_controller": "op3_ddpg_genetic.py",
+        "genetic_parallel_controller": "op3_ddpg_genetic_parallel.py",
+        "parallel_script": "run_genetic_parallel.py",
+        "train_world": "robotis_op3_train.wbt",
+        "test_controller_dir": "test_policy",
+        "test_controller": "test_policy.py",
+        "test_world": "robotis_op3_test.wbt",
+        "config_module": "config"
+    },
+    "ppo": {
+        "controller_dir": "op3_ppo_env",
+        "train_controller": "op3_ppo_env.py",
+        "train_world": "robotis_op3_train_ppo.wbt",
+        "test_controller_dir": "test_ppo_env",
+        "test_controller": "test_ppo_env.py",
+        "test_world": "robotis_op3_test_ppo.wbt",
+        "config_module": "config"
+    },
+    "sac": {
+        "controller_dir": "op3_sac_env",
+        "train_controller": "op3_sac_env.py",
+        "train_world": "robotis_op3_train_sac.wbt",
+        "test_controller_dir": "test_ppo_env",
+        "test_controller": "test_ppo_env.py",
+        "test_world": "robotis_op3_test_sac.wbt",
+        "config_module": "config"
+    }
+}
 
-# Angle check mode (NEW)
+# Angle check mode
 ANGLE_CHECK_DIR = CONTROLLERS_DIR / "angle_check"
 ANGLE_CHECK_CONTROLLER = ANGLE_CHECK_DIR / "angle_check.py"
+ANGLE_CHECK_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_angle_check.wbt"
 
-# World files
-TRAIN_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_train.wbt"
-TEST_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_test.wbt"
-ANGLE_CHECK_WORLD = PROJECT_ROOT / "worlds" / "robotis_op3_angle_check.wbt"  # NEW
-
-# Scenario mappings
 SCENARIOS = {
     "pak_gembong": {
         "import": "from scenarios.arm_control_pak_gembong import ArmControlPakGembong",
@@ -61,27 +86,23 @@ SCENARIOS = {
 
 def find_webots():
     """Find Webots executable."""
-    # Check WEBOTS_HOME environment variable first
     webots_home = os.environ.get("WEBOTS_HOME")
     if webots_home:
         webots_path = os.path.join(webots_home, "webots")
         if os.path.exists(webots_path):
             return webots_path
     
-    # Common Webots installation paths
     possible_paths = [
-        "/usr/local/webots/webots",  # Linux default
-        "/opt/webots/webots",  # Alternative Linux
-        os.path.expanduser("~/webots/webots"),  # User installation
+        "/usr/local/webots/webots",
+        "/opt/webots/webots",
+        os.path.expanduser("~/webots/webots"),
     ]
     
-    # Check if webots is in PATH
     import shutil
     webots_path = shutil.which("webots")
     if webots_path:
         return webots_path
     
-    # Check common installation paths
     for path in possible_paths:
         if os.path.exists(path):
             return path
@@ -89,10 +110,18 @@ def find_webots():
     return None
 
 
-def update_scenario_in_file(file_path, scenario_name):
+def update_scenario_in_file(file_path, scenario_name, algorithm="ddpg"):
     """Update scenario selection in a controller file."""
     if scenario_name not in SCENARIOS:
-        raise ValueError(f"Unknown scenario: {scenario_name}. Available: {list(SCENARIOS.keys())}")
+        # Try to find fall control variant for the algorithm
+        fall_variant = f"fall_control_{algorithm}"
+        if fall_variant in SCENARIOS:
+            scenario_name = fall_variant
+        elif scenario_name == "fall_control":
+            # Use base fall control if variant not found
+            pass
+        else:
+            raise ValueError(f"Unknown scenario: {scenario_name}. Available: {list(SCENARIOS.keys())}")
     
     scenario = SCENARIOS[scenario_name]
     
@@ -108,43 +137,34 @@ def update_scenario_in_file(file_path, scenario_name):
         if 'scenario_class_name' in line or ('scenario_name' in line and 'SCENARIO_CLASS.scenario_name' in line):
             updated_lines.append(line)
             continue
-        # Handle scenario import lines (match any scenario import, not just arm_control)
+        # Handle scenario import lines
         if 'from scenarios.' in line and 'import' in line:
-            # Check if this line matches our target scenario
             stripped_line = line.strip()
             is_commented = stripped_line.startswith('#')
             line_content = stripped_line.lstrip('#').strip()
             
-            # Preserve original indentation
             indent = len(line) - len(line.lstrip())
             
-            # Check if this line matches our target scenario import
-            # Match by checking if the class name is in the import line
             target_class = scenario["class"]
             if target_class in line_content:
                 # This is our scenario - uncomment it
                 updated_lines.append(' ' * indent + scenario["import"] + '\n')
             else:
-                # This is another scenario - comment it (if not already commented)
+                # This is another scenario - comment it
                 if not is_commented:
                     updated_lines.append(' ' * indent + '# ' + line_content + '\n')
                 else:
                     updated_lines.append(line)
         # Handle SCENARIO_CLASS assignment
         elif 'SCENARIO_CLASS' in line and '=' in line and 'scenario =' not in line:
-            # Check if this line matches our target scenario class
             stripped_line = line.strip()
             is_commented = stripped_line.startswith('#')
             line_content = stripped_line.lstrip('#').strip()
             
-            # Preserve original indentation
             indent = len(line) - len(line.lstrip())
             
             target_class = scenario["class"]
             
-            # Check if this line assigns our target class
-            # Pattern: "SCENARIO_CLASS = ClassName" or "SCENARIO_CLASS=ClassName"
-            # Extract the class name from the assignment
             if '=' in line_content:
                 assigned_class = line_content.split('=')[-1].strip()
                 is_target_class = assigned_class == target_class
@@ -152,30 +172,22 @@ def update_scenario_in_file(file_path, scenario_name):
                 is_target_class = False
             
             if is_target_class:
-                # This is our scenario - ensure it's uncommented and correct
                 if is_commented:
-                    # Uncomment it
                     updated_lines.append(' ' * indent + f'SCENARIO_CLASS = {target_class}\n')
                 else:
-                    # Already uncommented and correct - keep it as-is
                     updated_lines.append(line)
             else:
-                # This is another scenario - comment it (if not already commented)
                 if not is_commented:
                     updated_lines.append(' ' * indent + '# ' + line_content + '\n')
                 else:
                     updated_lines.append(line)
-        # Handle scenario initialization line (scenario = SCENARIO_CLASS(...))
+        # Handle scenario initialization line
         elif 'scenario =' in line and 'SCENARIO_CLASS' in line:
-            # Ensure this line is uncommented and correct
             stripped = line.strip()
             if stripped.startswith('#'):
-                # Uncomment it - preserve original indentation
                 indent = len(line) - len(line.lstrip())
-                # Create the correct line
-                updated_lines.append(' ' * indent + f'scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP)\n')
+                updated_lines.append(' ' * indent + f'scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP, algorithm="{algorithm}")\n')
             else:
-                # Already uncommented, keep it
                 updated_lines.append(line)
             scenario_init_found = True
         else:
@@ -185,9 +197,8 @@ def update_scenario_in_file(file_path, scenario_name):
     if not scenario_init_found:
         for i, line in enumerate(updated_lines):
             if 'robot = Supervisor()' in line:
-                # Insert scenario initialization after robot line
                 indent = len(line) - len(line.lstrip())
-                scenario_line = ' ' * indent + f'scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP)\n'
+                scenario_line = ' ' * indent + f'scenario = SCENARIO_CLASS(robot, timestep=config.TIMESTEP, algorithm="{algorithm}")\n'
                 updated_lines.insert(i + 1, scenario_line)
                 break
     
@@ -196,30 +207,23 @@ def update_scenario_in_file(file_path, scenario_name):
         f.writelines(updated_lines)
 
 
-def update_checkpoint_in_file(file_path, checkpoint_path):
-    """Update checkpoint path in test_policy.py.
-    
-    Args:
-        checkpoint_path: Full checkpoint path (e.g., "yudhis/ddpg_model.pt" or "ddpg_model.pt")
-    """
+def update_checkpoint_in_file(file_path, checkpoint_path, algorithm="ddpg"):
+    """Update checkpoint path in test controller file."""
     with open(file_path, 'r') as f:
         content = f.read()
     
-    # Check if checkpoint_path contains a subdirectory
     has_subdir = '/' in checkpoint_path or '\\' in checkpoint_path
     
     if has_subdir:
-        # Full path with subdirectory - replace entire checkpoint_path assignment
-        # Split path and build os.path.join expression
         path_parts = checkpoint_path.replace('\\', '/').split('/')
         
         # Build the path parts for os.path.join
-        path_args = ["os.path.dirname(__file__)", "'..'", "'op3_ddpg_env'", "'checkpoints'"]
+        controller_dir = ALGORITHMS[algorithm]["controller_dir"]
+        path_args = ["os.path.dirname(__file__)", "'..'", f"'{controller_dir}'", "'checkpoints'"]
         path_args.extend([f"'{part}'" for part in path_parts])
         path_join_expr = "os.path.join(" + ", ".join(path_args) + ")"
         
-        # Replace the entire checkpoint_path assignment (handles multi-line)
-        # Match both single-line and multi-line patterns
+        # Replace the entire checkpoint_path assignment
         multiline_pattern = r'checkpoint_path\s*=\s*os\.path\.join\([^)]*\n[^)]*\)'
         singleline_pattern = r'checkpoint_path\s*=\s*os\.path\.join\([^)]+\)'
         
@@ -230,15 +234,13 @@ def update_checkpoint_in_file(file_path, checkpoint_path):
         elif re.search(singleline_pattern, content):
             content = re.sub(singleline_pattern, replacement, content)
         else:
-            # Fallback: try to find any checkpoint_path assignment
             pattern = r'checkpoint_path\s*=\s*[^\n]+'
             content = re.sub(pattern, replacement, content)
     else:
-        # Just filename - replace config.CHECKPOINT_NAME or hardcoded "ddpg_model.pt"
-        # Handle multi-line checkpoint_path assignment (test_policy.py uses multi-line)
+        # Just filename
+        controller_dir = ALGORITHMS[algorithm]["controller_dir"]
         
-        # Pattern for multi-line: matches across newlines (test_policy.py format)
-        # Matches: checkpoint_path = os.path.join(..., \n ... config.CHECKPOINT_DIR, "ddpg_model.pt")
+        # Pattern for multi-line
         multiline_pattern = r'(checkpoint_path\s*=\s*os\.path\.join\([^)]*\n\s*[^)]*,\s*)(?:config\.CHECKPOINT_NAME|"ddpg_model\.pt")'
         replacement_multiline = rf'\1"{checkpoint_path}"'
         
@@ -246,20 +248,16 @@ def update_checkpoint_in_file(file_path, checkpoint_path):
         singleline_pattern = r'(checkpoint_path\s*=\s*os\.path\.join\([^)]+,\s*)(?:config\.CHECKPOINT_NAME|"ddpg_model\.pt")'
         replacement_singleline = rf'\1"{checkpoint_path}"'
         
-        # Try multi-line first (most common case in test_policy.py)
         if re.search(multiline_pattern, content, re.MULTILINE | re.DOTALL):
             content = re.sub(multiline_pattern, replacement_multiline, content, flags=re.MULTILINE | re.DOTALL)
         elif re.search(singleline_pattern, content):
             content = re.sub(singleline_pattern, replacement_singleline, content)
         else:
-            # Fallback: replace just the filename part anywhere it appears
-            # This handles the case where config.CHECKPOINT_DIR is on a different line
             content = re.sub(
                 r'"ddpg_model\.pt"',
                 f'"{checkpoint_path}"',
                 content
             )
-            # Also try config.CHECKPOINT_NAME
             content = re.sub(
                 r'config\.CHECKPOINT_NAME',
                 f'"{checkpoint_path}"',
@@ -271,13 +269,7 @@ def update_checkpoint_in_file(file_path, checkpoint_path):
 
 
 def launch_webots(world_file, mode="fast", env=None):
-    """Launch Webots with the specified world file.
-    
-    Args:
-        world_file: Path to world file
-        mode: Webots mode (fast, run, etc.)
-        env: Optional environment variables dict
-    """
+    """Launch Webots with the specified world file."""
     webots_path = find_webots()
     
     if not webots_path:
@@ -290,7 +282,6 @@ def launch_webots(world_file, mode="fast", env=None):
         print(f"❌ Error: World file not found: {world_file}")
         sys.exit(1)
     
-    # Launch Webots
     cmd = [webots_path, f"--mode={mode}", str(world_file.absolute())]
     print(f"🚀 Launching Webots: {' '.join(cmd)}")
     
@@ -308,53 +299,127 @@ def validate_angle_check_setup():
     """Validate that angle check mode is properly set up."""
     if not ANGLE_CHECK_CONTROLLER.exists():
         print(f"❌ Angle check controller not found: {ANGLE_CHECK_CONTROLLER}")
-        print("Please ensure the controller file exists in controllers/angle_check/")
         return False
     
     if not ANGLE_CHECK_WORLD.exists():
         print(f"❌ Angle check world file not found: {ANGLE_CHECK_WORLD}")
-        print("Please ensure the world file exists in worlds/")
         return False
-    
-    # Check world file references the correct controller
-    try:
-        with open(ANGLE_CHECK_WORLD, 'r') as f:
-            world_content = f.read()
-        
-        # Check if controller is set to "angle_check"
-        if 'controller "angle_check"' not in world_content:
-            print(f"⚠️  Warning: World file {ANGLE_CHECK_WORLD.name} might not reference 'angle_check' controller")
-            print("   The world file should contain: controller \"angle_check\"")
-    except:
-        pass
     
     return True
 
 
+def validate_algorithm_config(algorithm):
+    """Validate that the algorithm configuration exists."""
+    if algorithm not in ALGORITHMS:
+        print(f"❌ Unknown algorithm: {algorithm}")
+        print(f"Available algorithms: {list(ALGORITHMS.keys())}")
+        return False
+    
+    alg_config = ALGORITHMS[algorithm]
+    
+    # Check if train controller exists
+    train_controller_path = CONTROLLERS_DIR / alg_config["controller_dir"] / alg_config["train_controller"]
+    if not train_controller_path.exists():
+        print(f"❌ Train controller not found: {train_controller_path}")
+        return False
+    
+    # Check if world file exists
+    train_world_path = PROJECT_ROOT / "worlds" / alg_config["train_world"]
+    if not train_world_path.exists():
+        print(f"❌ Train world file not found: {train_world_path}")
+        return False
+    
+    return True
+
+
+def create_test_controller_if_needed(algorithm):
+    """Create test controller directory and files if they don't exist."""
+    alg_config = ALGORITHMS[algorithm]
+    
+    # Test controller directory
+    test_dir = CONTROLLERS_DIR / alg_config["test_controller_dir"]
+    test_file = test_dir / alg_config["test_controller"]
+    
+    # If test directory doesn't exist, create it from template
+    if not test_dir.exists():
+        print(f"📁 Creating test controller directory for {algorithm}...")
+        test_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create __init__.py
+        init_file = test_dir / "__init__.py"
+        init_file.write_text("")
+        
+        # Create test controller file from DDPG template if it exists
+        ddpg_test_dir = CONTROLLERS_DIR / "test_policy"
+        ddpg_test_file = ddpg_test_dir / "test_policy.py"
+        
+        if ddpg_test_file.exists():
+            with open(ddpg_test_file, 'r') as f:
+                content = f.read()
+            
+            # Update imports for the specific algorithm
+            controller_dir = alg_config["controller_dir"]
+            content = content.replace(
+                "from op3_ddpg_env.ddpg_agent import DDPG",
+                f"from {controller_dir}.{algorithm}_agent import {algorithm.upper()}Agent"
+            )
+            
+            # Update config import
+            content = content.replace(
+                "from op3_ddpg_env import config",
+                f"from {controller_dir} import config"
+            )
+            
+            # Save to new test controller
+            with open(test_file, 'w') as f:
+                f.write(content)
+            print(f"✅ Created test controller: {test_file}")
+        else:
+            print(f"⚠️  Warning: Could not find DDPG test controller template")
+    
+    return test_file.exists()
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Launch Webots training or testing with different scenarios",
+        description="Launch Webots training or testing with different scenarios and algorithms",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py --train --scenario=pak_gembong
-  python main.py --train --scenario=yudhis
-  python main.py --genetic --scenario=pak_gembong
-  python main.py --genetic --scenario=yudhis
-  python main.py --test --scenario=yudhis
-  python main.py --test --scenario=yudhis --checkpoint=ddpg_model.pt
-  python main.py --angle_check  # NEW: Manual joint angle testing mode
+  # Training
+  python main.py --train --scenario=fall_control --alg=ddpg
+  python main.py --train --scenario=fall_control --alg=ppo
+  python main.py --train --scenario=fall_control --alg=sac
+  
+  # Genetic training (DDPG only)
+  python main.py --genetic --scenario=fall_control --alg=ddpg
+  
+  # Testing
+  python main.py --test --scenario=fall_control --alg=ppo
+  python main.py --test --scenario=fall_control --alg=sac --checkpoint=sac_final.pt
+  
+  # Angle check
+  python main.py --angle_check
         """
     )
     
     # Mode selection
     mode_group = parser.add_mutually_exclusive_group(required=True)
     mode_group.add_argument('--train', action='store_true', help='Run training mode')
-    mode_group.add_argument('--genetic', action='store_true', help='Run genetic algorithm multi-agent training')
+    mode_group.add_argument('--genetic', action='store_true', help='Run genetic algorithm multi-agent training (DDPG only)')
     mode_group.add_argument('--test', action='store_true', help='Run testing mode')
-    mode_group.add_argument('--angle_check', action='store_true', help='NEW: Manual joint angle testing mode')
+    mode_group.add_argument('--angle_check', action='store_true', help='Manual joint angle testing mode')
     
-    # Scenario selection (not needed for angle_check)
+    # Algorithm selection
+    parser.add_argument(
+        '--alg',
+        type=str,
+        default='ddpg',
+        choices=['ddpg', 'ppo', 'sac'],
+        help='Algorithm to use (default: ddpg)'
+    )
+    
+    # Scenario selection
     parser.add_argument(
         '--scenario',
         type=str,
@@ -375,24 +440,19 @@ Examples:
     
     # Validate arguments
     if args.angle_check:
-        # angle_check doesn't need scenario
         if args.scenario:
             print("⚠️  Warning: --scenario is ignored in --angle_check mode")
+        if args.alg != 'ddpg':
+            print("⚠️  Warning: --alg is ignored in --angle_check mode")
         
-        # Validate setup
         if not validate_angle_check_setup():
             sys.exit(1)
     else:
-        # Other modes require scenario
         if not args.scenario:
             parser.error("--scenario is required for --train, --genetic, or --test modes")
-    
-    # Validate checkpoint for test mode
-    if args.test and args.checkpoint:
-        checkpoint_path = CONTROLLERS_DIR / "op3_ddpg_env" / "checkpoints" / args.checkpoint
-        if not checkpoint_path.exists():
-            print(f"⚠️  Warning: Checkpoint file not found: {checkpoint_path}")
-            print("Continuing anyway...")
+        
+        if not validate_algorithm_config(args.alg):
+            sys.exit(1)
     
     try:
         if args.angle_check:
@@ -403,70 +463,53 @@ Examples:
             print("\n" + "=" * 70)
             print("🤖 OP3 JOINT ANGLE CHECK MODE")
             print("=" * 70)
-            print("INSTRUCTIONS:")
-            print("1. Webots will start with OP3 robot")
-            print("2. Switch to the Webots console (usually bottom panel)")
-            print("3. Type commands to control joints:")
-            print()
-            print("   📋 Available commands:")
-            print("     set <joint_index> <angle_rad>  - Set joint to angle")
-            print("     setall <angle_rad>             - Set ALL joints to same angle")
-            print("     setgroup <indices> <angle>     - Set multiple joints")
-            print("     reset                          - Reset all joints to 0 rad")
-            print("     preset <name>                  - Apply preset pose")
-            print("     list                           - List current joint angles")
-            print("     help                           - Show command list")
-            print("     quit                           - Exit program")
-            print()
-            print("   💡 Preset poses: standing, fall_forward, fall_backward,")
-            print("                   fall_right, fall_left, arms_up, crouch")
-            print()
-            print("   📊 Joint indices (0-19):")
-            print("     0: ShoulderR   1: ShoulderL")
-            print("     2: ArmUpperR   3: ArmUpperL")
-            print("     4: ArmLowerR   5: ArmLowerL")
-            print("     6: PelvYR      7: PelvYL")
-            print("     8: PelvR       9: PelvL")
-            print("     10: LegUpperR  11: LegUpperL")
-            print("     12: LegLowerR  13: LegLowerL")
-            print("     14: AnkleR     15: AnkleL")
-            print("     16: FootR      17: FootL")
-            print("     18: Neck       19: Head")
-            print("=" * 70)
-            print("🎮 Launching Webots...")
             
             # Launch Webots with angle check world
             launch_webots(ANGLE_CHECK_WORLD, mode="run")
             
         elif args.train:
-            print(f"📝 Setting up training with scenario: {args.scenario}")
-            update_scenario_in_file(TRAIN_CONTROLLER, args.scenario)
-            print(f"✅ Updated {TRAIN_CONTROLLER}")
-            print(f"🎮 Launching training world...")
-            launch_webots(TRAIN_WORLD)
+            alg_config = ALGORITHMS[args.alg]
+            
+            print(f"📝 Setting up {args.alg.upper()} training with scenario: {args.scenario}")
+            
+            # Update scenario in train controller
+            train_controller_path = CONTROLLERS_DIR / alg_config["controller_dir"] / alg_config["train_controller"]
+            update_scenario_in_file(train_controller_path, args.scenario, args.alg)
+            print(f"✅ Updated {train_controller_path}")
+            
+            # Launch training
+            train_world_path = PROJECT_ROOT / "worlds" / alg_config["train_world"]
+            print(f"🎮 Launching {args.alg.upper()} training world: {train_world_path.name}")
+            launch_webots(train_world_path)
             
         elif args.genetic:
+            if args.alg != 'ddpg':
+                print(f"❌ Error: Genetic algorithm training is only supported for DDPG, not {args.alg}")
+                print("Use --train mode for PPO and SAC training")
+                sys.exit(1)
+            
+            alg_config = ALGORITHMS[args.alg]
+            
             print(f"📝 Setting up parallel genetic training with scenario: {args.scenario}")
             
             # Update genetic parallel controller scenario
-            genetic_parallel_controller = CONTROLLERS_DIR / "op3_ddpg_env" / "op3_ddpg_genetic_parallel.py"
-            update_scenario_in_file(genetic_parallel_controller, args.scenario)
+            genetic_parallel_controller = CONTROLLERS_DIR / alg_config["controller_dir"] / alg_config["genetic_parallel_controller"]
+            update_scenario_in_file(genetic_parallel_controller, args.scenario, args.alg)
             print(f"✅ Updated {genetic_parallel_controller}")
             
             # Run parallel genetic training script
-            parallel_script = CONTROLLERS_DIR / "op3_ddpg_env" / "run_genetic_parallel.py"
+            parallel_script = CONTROLLERS_DIR / alg_config["controller_dir"] / alg_config["parallel_script"]
             scenario_class = SCENARIOS[args.scenario]["class"]
             
-            print(f"🚀 Launching parallel genetic training...")
+            print(f"🚀 Launching parallel genetic training for {args.alg.upper()}...")
             if genetic_config:
                 print(f"   This will launch {genetic_config.POPULATION_SIZE} Webots instances in parallel")
             else:
                 print(f"   This will launch multiple Webots instances in parallel")
             
-            import subprocess
             result = subprocess.run(
                 [sys.executable, str(parallel_script), scenario_class],
-                cwd=str(CONTROLLERS_DIR / "op3_ddpg_env")
+                cwd=str(CONTROLLERS_DIR / alg_config["controller_dir"])
             )
             
             if result.returncode != 0:
@@ -474,28 +517,48 @@ Examples:
                 sys.exit(1)
             
         elif args.test:
-            print(f"📝 Setting up testing with scenario: {args.scenario}")
-            update_scenario_in_file(TEST_CONTROLLER, args.scenario)
-            print(f"✅ Updated {TEST_CONTROLLER}")
+            alg_config = ALGORITHMS[args.alg]
+            
+            print(f"📝 Setting up {args.alg.upper()} testing with scenario: {args.scenario}")
+            
+            # Create test controller if needed
+            if not create_test_controller_if_needed(args.alg):
+                print(f"❌ Test controller for {args.alg} could not be created")
+                sys.exit(1)
+            
+            # Update scenario in test controller
+            test_controller_path = CONTROLLERS_DIR / alg_config["test_controller_dir"] / alg_config["test_controller"]
+            update_scenario_in_file(test_controller_path, args.scenario, args.alg)
+            print(f"✅ Updated {test_controller_path}")
+            
+            # Update checkpoint path if specified
+            if args.checkpoint:
+                update_checkpoint_in_file(test_controller_path, args.checkpoint, args.alg)
+                print(f"📦 Using checkpoint: {args.checkpoint}")
             
             # Set checkpoint path via environment variable
             env = os.environ.copy()
             if args.checkpoint:
                 env['CHECKPOINT_PATH'] = args.checkpoint
-                print(f"📦 Using checkpoint: {args.checkpoint}")
             else:
-                # Use scenario-specific default
+                # Try to get default checkpoint from config
                 try:
-                    sys.path.insert(0, str(CONTROLLERS_DIR / "op3_ddpg_env"))
-                    import config as train_config
-                    scenario_checkpoint = f"{args.scenario}/{train_config.CHECKPOINT_NAME}"
-                    env['CHECKPOINT_PATH'] = scenario_checkpoint
-                    print(f"📦 Using default checkpoint for scenario: {scenario_checkpoint}")
-                except:
-                    pass
+                    sys.path.insert(0, str(CONTROLLERS_DIR / alg_config["controller_dir"]))
+                    import importlib
+                    config_module = importlib.import_module(alg_config["config_module"])
+                    
+                    # Create checkpoint path
+                    if hasattr(config_module, 'CHECKPOINT_NAME'):
+                        scenario_checkpoint = f"{args.scenario}/{config_module.CHECKPOINT_NAME}"
+                        env['CHECKPOINT_PATH'] = scenario_checkpoint
+                        print(f"📦 Using default checkpoint for scenario: {scenario_checkpoint}")
+                except Exception as e:
+                    print(f"⚠️  Warning: Could not load config for {args.alg}: {e}")
             
-            print(f"🎮 Launching test world...")
-            launch_webots(TEST_WORLD, mode="normal", env=env)
+            # Launch test world
+            test_world_path = PROJECT_ROOT / "worlds" / alg_config["test_world"]
+            print(f"🎮 Launching {args.alg.upper()} test world: {test_world_path.name}")
+            launch_webots(test_world_path, mode="realtime", env=env)
             
     except Exception as e:
         print(f"❌ Error: {e}")

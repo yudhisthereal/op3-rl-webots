@@ -1,21 +1,92 @@
-# fall_control.py for SAC
-# Modified with simplified reward based only on joint angle errors
-
 import numpy as np
+import sys
+import os
+
+# Add scenarios directory to path for base_scenario import
+SCENARIOS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCENARIOS_DIR)
+
 from scenarios.base_scenario import BaseScenario
-import config
+
+
+def load_config(algorithm='ddpg'):
+    """Dynamically load config based on algorithm."""
+    # Add project root to path to find controller directories
+    PROJECT_ROOT = os.path.abspath(os.path.join(SCENARIOS_DIR, '..'))
+    sys.path.insert(0, PROJECT_ROOT)
+    
+    try:
+        if algorithm == 'ddpg':
+            from controllers.op3_ddpg_env import config
+        elif algorithm == 'ppo':
+            from controllers.op3_ppo_env import config
+        elif algorithm == 'sac':
+            from controllers.op3_sac_env import config
+        else:
+            raise ValueError(f"Unknown algorithm: {algorithm}")
+        return config
+    except ImportError as e:
+        print(f"Warning: Could not load config for algorithm '{algorithm}': {e}")
+        print("Using default config")
+        
+        # Default config
+        class DefaultConfig:
+            JOINT_NAMES = [
+                "ShoulderR", "ShoulderL",
+                "ArmUpperR", "ArmUpperL",
+                "ArmLowerR", "ArmLowerL",
+                "PelvYR", "PelvYL",
+                "PelvR", "PelvL",
+                "LegUpperR", "LegUpperL",
+                "LegLowerR", "LegLowerL",
+                "AnkleR", "AnkleL",
+                "FootR", "FootL",
+                "Neck", "Head"
+            ]
+            ANGLE_LIMITS = {
+                "ShoulderR": (-1.57, 1.57),
+                "ShoulderL": (-1.57, 1.57),
+                "ArmUpperR": (-1.57, 1.57),
+                "ArmUpperL": (-1.57, 1.57),
+                "ArmLowerR": (-1.57, 1.57),
+                "ArmLowerL": (-1.57, 1.57),
+                "PelvYR": (-1.57, 1.57),
+                "PelvYL": (-1.57, 1.57),
+                "PelvR": (-1.57, 1.57),
+                "PelvL": (-1.57, 1.57),
+                "LegUpperR": (-1.57, 1.57),
+                "LegUpperL": (-1.57, 1.57),
+                "LegLowerR": (-1.57, 1.57),
+                "LegLowerL": (-1.57, 1.57),
+                "AnkleR": (-1.57, 1.57),
+                "AnkleL": (-1.57, 1.57),
+                "FootR": (-1.57, 1.57),
+                "FootL": (-1.57, 1.57),
+                "Neck": (-1.57, 1.57),
+                "Head": (-1.57, 1.57)
+            }
+            MAX_STEPS = 1000
+            TIMESTEP = 32
+        return DefaultConfig()
 
 
 class FallControl(BaseScenario):
-    """Fall control scenario with simplified joint error reward."""
+    """Fall control scenario."""
     
-    scenario_name = 'fall_control_sac'  # Different name for SAC
+    scenario_name = 'fall_control'
     provides_acceleration = False
     
-    def __init__(self, robot, timestep=32):
-        self.CONTROL_JOINTS = config.JOINT_NAMES  # All 20 joints
+    def __init__(self, robot, timestep=32, algorithm='ddpg'):
+        self.algorithm = algorithm
         
-        # Goal joint positions for "protective falling pose"
+        # Load config for this algorithm
+        config = load_config(algorithm)
+        
+        self.CONTROL_JOINTS = config.JOINT_NAMES
+        self.joint_limits = config.ANGLE_LIMITS
+        self.max_steps = config.MAX_STEPS
+        
+        # Goal joint positions
         self.GOAL_POSITIONS = {
             "ShoulderR": 1.5, "ShoulderL": -1.5,
             "ArmUpperR": -1.25, "ArmUpperL": 1.25,
@@ -28,33 +99,23 @@ class FallControl(BaseScenario):
             "Neck": 0.0, "Head": 0.0,
         }
         
-        # Standing position joint angles
-        self.STANDING_POSITIONS = {
-            "ShoulderR": 0.0, "ShoulderL": 0.0,
-            "ArmUpperR": 0.0, "ArmUpperL": 0.0,
-            "ArmLowerR": 0.0, "ArmLowerL": 0.0,
-            "PelvYR": 0.0, "PelvYL": 0.0,
-            "PelvR": 0.0, "PelvL": 0.0,
-            "LegUpperR": 0.0, "LegUpperL": 0.0,
-            "LegLowerR": 0.0, "LegLowerL": 0.0,
-            "AnkleR": 0.0, "AnkleL": 0.0,
-            "FootR": 0.0, "FootL": 0.0,
-            "Neck": 0.0, "Head": 0.0,
-        }
-        
-        super().__init__(robot, timestep)
+        # Standing position
+        self.STANDING_POSITIONS = {name: 0.0 for name in self.CONTROL_JOINTS}
         
         # Push parameters
         self.push_delay_steps = int(0.5 * 1000 / timestep)
         self.push_applied = False
         self.push_step = 0
         
+        super().__init__(robot, timestep)
+        
         # Get robot node for CoM tracking
         self.robot_node = self.robot.getSelf()
-        
-        # Initialize CoM tracking
         self.initial_com_height = 0.0
         self.current_com_height = 0.0
+        
+        # Setup environment
+        self._setup_environment()
     
     def _setup_environment(self):
         """Setup motors and sensors for all joints."""
@@ -70,19 +131,17 @@ class FallControl(BaseScenario):
             self.sensors.append(s)
     
     def get_obs_dim(self):
-        """Return observation dimension (20 joint positions + 1 CoM height)."""
-        return 21  # 20 joint positions + CoM height
+        return 21  # 20 joints + CoM height
     
     def get_act_dim(self):
-        """Return action dimension (20 joint commands)."""
-        return 20
+        return 20  # 20 joint commands
     
     def get_com_height(self):
         """Get current center of mass height from ground."""
         if self.robot_node:
             try:
                 translation = self.robot_node.getField("translation").getSFVec3f()
-                return translation[2]  # Z coordinate is height
+                return translation[2]
             except:
                 pass
         return 0.0
@@ -165,8 +224,8 @@ class FallControl(BaseScenario):
         """Apply action with joint-specific limits."""
         for i, (m, a) in enumerate(zip(self.motors, action)):
             jname = self.CONTROL_JOINTS[i]
-            if jname in config.ANGLE_LIMITS:
-                low, high = config.ANGLE_LIMITS[jname]
+            if jname in self.joint_limits:
+                low, high = self.joint_limits[jname]
             else:
                 low, high = -1.57, 1.57
             a = float(np.clip(a, low, high))
@@ -174,21 +233,10 @@ class FallControl(BaseScenario):
     
     def compute_reward(self, obs, action, next_obs, step):
         """
-        SIMPLIFIED REWARD FOR SAC:
-        Based ONLY on joint angle errors (current - goal angles).
-        
-        Args:
-            obs: Previous observation (20 joint pos + 1 CoM)
-            action: Action taken
-            next_obs: Current observation after action
-            step: Current step in episode
-            
-        Returns:
-            reward: Scalar reward based on joint angle errors
-            done: Boolean indicating if episode is done
-            termination_reason: String describing why episode ended
+        Compute reward based on joint angle errors.
+        Same for all algorithms - based only on joint errors.
         """
-        # Extract current joint positions (first 20 elements)
+        # Extract current joint positions
         current_joints = next_obs[:20] if len(next_obs) >= 20 else next_obs
         
         # Extract previous joint positions
@@ -211,7 +259,6 @@ class FallControl(BaseScenario):
         avg_error = total_error / len(current_joints) if len(current_joints) > 0 else 1.0
         
         # Reward inversely proportional to error
-        # Using negative exponential: higher reward for smaller error
         error_reward = np.exp(-avg_error * 3.0) * 2.0
         
         # 2. PROGRESS BONUS - reward for moving toward goal
@@ -231,36 +278,36 @@ class FallControl(BaseScenario):
                     progress = prev_error - current_error
                     progress_bonus += progress * 0.5
         
-        # 3. SMOOTHNESS PENALTY - small penalty for jerky movements
+        # 3. SMOOTHNESS PENALTY
         smoothness_penalty = 0.0
         if len(prev_joints) == len(current_joints):
             for i in range(len(current_joints)):
                 movement = abs(current_joints[i] - prev_joints[i])
                 smoothness_penalty += movement * 0.1
         
-        # 4. ACTION MAGNITUDE PENALTY - encourage smaller actions
-        action_penalty = np.mean(np.abs(action)) * 0.05
+        # 4. For SAC, add action magnitude penalty
+        action_penalty = 0.0
+        if self.algorithm == 'sac':
+            action_penalty = np.mean(np.abs(action)) * 0.05
         
-        # 5. EXTREME POSITION PENALTY - penalize joints near limits
+        # 5. EXTREME POSITION PENALTY
         extreme_penalty = 0.0
         for i, joint_name in enumerate(self.CONTROL_JOINTS[:len(current_joints)]):
             current_pos = current_joints[i]
             
-            # Get joint limits
-            if joint_name in config.ANGLE_LIMITS:
-                low, high = config.ANGLE_LIMITS[joint_name]
+            if joint_name in self.joint_limits:
+                low, high = self.joint_limits[joint_name]
                 
-                # Penalize if close to limits
                 if abs(current_pos - low) < 0.1 or abs(current_pos - high) < 0.1:
                     extreme_penalty += 0.1
         
         # TOTAL REWARD
         total_reward = (
-            error_reward +                # Main error-based reward
-            progress_bonus -              # Bonus for progress
-            smoothness_penalty -          # Penalty for jerky movements
-            action_penalty -              # Penalty for large actions
-            extreme_penalty               # Penalty for extreme positions
+            error_reward +
+            progress_bonus -
+            smoothness_penalty -
+            action_penalty -
+            extreme_penalty
         )
         
         # Termination conditions
@@ -268,10 +315,9 @@ class FallControl(BaseScenario):
         termination_reason = None
         
         # Max steps
-        if step >= config.MAX_STEPS:
+        if step >= self.max_steps:
             done = True
             termination_reason = "max_steps"
-            # Small bonus for completing episode with low error
             if avg_error < 0.3:
                 total_reward += 1.0
         
@@ -292,8 +338,8 @@ class FallControl(BaseScenario):
             total_reward -= 1.0
         
         # Debug output
-        if step % 50 == 0:
-            print(f"Step {step}: Avg error={avg_error:.3f}, Reward={total_reward:.3f}")
+        if step % 100 == 0:
+            print(f"[{self.algorithm.upper()}] Step {step}: Avg error={avg_error:.3f}, Reward={total_reward:.3f}")
         
         return total_reward, done, termination_reason
     
@@ -309,14 +355,13 @@ class FallControl(BaseScenario):
                 total_error += abs(current_pos - goal_pos)
             
             return total_error / 20
-        return 1.0  # Default high error
+        return 1.0
     
     def is_success(self, obs, done):
         """Success is low joint error and not fallen."""
         if not done:
             return False
         
-        # Check joint error
         if len(obs) >= 20:
             current_joints = obs[:20]
             total_error = 0.0
@@ -327,6 +372,6 @@ class FallControl(BaseScenario):
                 total_error += abs(current_pos - goal_pos)
             
             avg_error = total_error / 20
-            return avg_error < 0.2  # Success if average error < 0.2 rad
+            return avg_error < 0.2
         
         return False
