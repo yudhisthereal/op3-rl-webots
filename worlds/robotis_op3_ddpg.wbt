@@ -34,14 +34,14 @@ Ball {
 }
 RobotisOp3 {
   translation 0 0 0.292665
-  controller "op3_ppo"
+  controller "op3_ddpg"
   supervisor TRUE
   cameraWidth 1280
   cameraHeight 720
   bodySlot [
     InertialUnit {
-      translation 0 0.01 0.09
       name "InertialUnit"
+      translation 0 0.01 0.09
     }
   ]
 }
