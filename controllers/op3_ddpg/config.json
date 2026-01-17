@@ -1,6 +1,6 @@
 {
-  "mode": "train",
-  "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final.pt",
+  "mode": "test",
+  "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final_armslegs.pt",
   
   "control_joints": [
     "ShoulderR", "ShoulderL", 
@@ -23,6 +23,30 @@
     "LegLowerL": 1.5
   },
   
+  "push_force": {
+    "enabled": true,
+    "force": 20.0,
+    "angle": 0.0,
+    "delay_steps": 20
+  },
+  
+  "initial_state": {
+    "translation": [0.0, 0.0, 0.292665],
+    "rotation": [0.0, 0.0, 1.0, 0.0],
+    "joint_angles": {
+      "ShoulderR": 0.0,
+      "ShoulderL": 0.0,
+      "ArmUpperR": -1.0,
+      "ArmUpperL": 1.0,
+      "ArmLowerR": 0.57,
+      "ArmLowerL": -0.57,
+      "LegUpperR": 0.3,
+      "LegUpperL": -0.3,
+      "LegLowerR": -0.6,
+      "LegLowerL": 0.6
+    }
+  },
+  
   "training": {
     "max_episodes": 10000,
     "max_steps": 30,
@@ -43,7 +67,8 @@
     "reward": {
       "angle_tolerance": 0.025,
       "success_reward": 10.0,
-      "angle_error_weight": -1.0
+      "angle_error_weight": -1.0,
+      "stability_bonus": 0.1
     },
     
     "joint_limits": {

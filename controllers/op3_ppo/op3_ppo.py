@@ -29,7 +29,7 @@ def load_config():
     config_path = os.path.join(CONTROLLER_DIR, "config.json")
     
     if not os.path.exists(config_path):
-        # Create default config if it doesn't exist
+        # Create default config with push_force and initial_state
         default_config = {
             "mode": "train",
             "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
@@ -38,6 +38,21 @@ def load_config():
                 "ShoulderR": 1.0,
                 "ArmUpperR": -0.9,
                 "ArmLowerR": 0.4
+            },
+            "push_force": {
+                "enabled": False,
+                "force": 5.0,
+                "angle": 0.0,
+                "delay_steps": 20
+            },
+            "initial_state": {
+                "translation": [0.0, 0.0, 0.292665],
+                "rotation": [0.0, 0.0, 1.0, 0.0],
+                "joint_angles": {
+                    "ShoulderR": 0.0,
+                    "ArmUpperR": -1.0,
+                    "ArmLowerR": 0.57
+                }
             },
             "training": {
                 "max_episodes": 2000,
@@ -54,10 +69,11 @@ def load_config():
                 },
                 "reward": {
                     "angle_tolerance": 0.05,
-                    "time_penalty": -0.001,  # Smaller penalty
-                    "success_reward": 10.0,  # Larger success reward
-                    "angle_error_weight": -1.0,  # Less harsh penalty
-                    "progress_bonus": 0.1  # Bonus for reducing error
+                    "time_penalty": -0.001,
+                    "success_reward": 10.0,
+                    "angle_error_weight": -1.0,
+                    "progress_bonus": 0.1,
+                    "stability_bonus": 0.1
                 },
                 "joint_limits": {
                     "ShoulderR": [-1.57, 1.57],
@@ -354,11 +370,29 @@ class ArmTrainingEnvironment:
         self.robot = robot
         self.config = config
         
+        # Get robot node for applying forces
+        self.robot_node = robot.getSelf()
+        
         # Joints to control
         self.control_joints = config["control_joints"]
         self.goal_angles = config["goal_angles"]
         self.joint_limits = config["training"]["joint_limits"]
         self.timestep = config["training"]["timestep"]
+        
+        # Push force configuration
+        self.push_force_config = config.get("push_force", {
+            "enabled": False,
+            "force": 5.0,
+            "angle": 0.0,
+            "delay_steps": 20
+        })
+        
+        # Initial state configuration
+        self.initial_state = config.get("initial_state", {
+            "translation": [0.0, 0.0, 0.292665],
+            "rotation": [0.0, 0.0, 1.0, 0.0],
+            "joint_angles": {}
+        })
         
         # Reward parameters
         reward_config = config["training"]["reward"]
@@ -367,29 +401,37 @@ class ArmTrainingEnvironment:
         self.success_reward = reward_config["success_reward"]
         self.angle_error_weight = reward_config["angle_error_weight"]
         self.progress_bonus = reward_config.get("progress_bonus", 0.0)
+        self.stability_bonus = reward_config.get("stability_bonus", 0.0)
         
         # Initialize motors
         self.motors = {}
         self.sensors = {}
         
-        for joint_name in self.control_joints:
+        # Initialize all joints from initial_state
+        all_joints = set(self.control_joints)
+        if "joint_angles" in self.initial_state:
+            all_joints.update(self.initial_state["joint_angles"].keys())
+        
+        for joint_name in all_joints:
             try:
                 motor = robot.getDevice(joint_name)
                 sensor = motor.getPositionSensor()
                 sensor.enable(self.timestep)
                 
-                # Set initial position to 0
-                motor.setPosition(0.0)
-                
                 self.motors[joint_name] = motor
                 self.sensors[joint_name] = sensor
                 print(f"✅ Found joint: {joint_name}")
             except:
-                print(f"❌ Could not find joint: {joint_name}")
+                if joint_name in self.control_joints:
+                    print(f"❌ Could not find joint: {joint_name}")
         
         print(f"Observation dimension: {len(self.control_joints)}")
         print(f"Action dimension: {len(self.control_joints)}")
         print(f"Goal angles: {self.goal_angles}")
+        
+        # Track if push force has been applied
+        self.push_force_applied = False
+        self.push_step_counter = 0
     
     def get_observation(self):
         """Get current observation: delta between current and goal angles."""
@@ -427,23 +469,84 @@ class ArmTrainingEnvironment:
                 
                 self.motors[joint_name].setPosition(scaled_action)
     
+    def apply_push_force(self):
+        """Apply push force to the robot's head."""
+        if not self.push_force_config["enabled"] or self.push_force_applied:
+            return
+        
+        self.push_step_counter += 1
+        
+        # Apply force after delay steps
+        if self.push_step_counter >= self.push_force_config["delay_steps"]:
+            force = self.push_force_config["force"]
+            angle = self.push_force_config["angle"]
+            
+            # Calculate force vector based on angle
+            # Webots: x is forward, y is left, z is up
+            fx = force * np.cos(angle)
+            fy = force * np.sin(angle)
+            fz = 0.0  # No vertical force
+            
+            # Apply force to head (relative to robot coordinate system)
+            # Using addForceWithOffset(force, offset, relative=True)
+            force_vector = [fx, fy, fz]
+            offset = [0.0, 0.0, 0.1]  # Offset from center to head (adjust as needed)
+            
+            self.robot_node.addForceWithOffset(force_vector, offset, True)
+            self.push_force_applied = True
+            
+            print(f"💨 Applied push force: {force}N at angle: {angle:.2f} rad")
+    
     def step(self):
         """Step the simulation."""
         self.robot.step(self.timestep)
     
     def reset(self):
-        """Reset the environment to initial state."""
-        # Set all joints to random initial angles
-        for joint_name in self.control_joints:
-            if joint_name in self.motors:
-                # Random initial angle between limits
-                low, high = self.joint_limits[joint_name]
-                init_angle = np.random.uniform(low * 0.5, high * 0.5)
-                self.motors[joint_name].setPosition(init_angle)
+        """Reset the environment to initial state with proper stabilization."""
+        # Reset push force tracking
+        self.push_force_applied = False
+        self.push_step_counter = 0
         
-        # Step simulation to apply reset
-        for _ in range(10):
-            self.step()
+        # Reset robot translation and rotation
+        translation = self.initial_state.get("translation", [0.0, 0.0, 0.292665])
+        rotation = self.initial_state.get("rotation", [0.0, 0.0, 1.0, 0.0])
+        
+        translation_field = self.robot_node.getField("translation")
+        rotation_field = self.robot_node.getField("rotation")
+        
+        translation_field.setSFVec3f(translation)
+        rotation_field.setSFRotation(rotation)
+        
+        # Reset joint positions from initial_state
+        if "joint_angles" in self.initial_state:
+            for joint_name, angle in self.initial_state["joint_angles"].items():
+                if joint_name in self.motors:
+                    self.motors[joint_name].setPosition(angle)
+        
+        # Step simulation multiple times to allow robot to stabilize
+        stabilization_steps = 10
+        for _ in range(stabilization_steps):
+            self.robot.step(self.timestep)
+        
+        # Check if joints have reached initial positions
+        max_attempts = 100
+        for attempt in range(max_attempts):
+            all_at_initial = True
+            
+            if "joint_angles" in self.initial_state:
+                for joint_name, target_angle in self.initial_state["joint_angles"].items():
+                    if joint_name in self.sensors:
+                        current_angle = self.sensors[joint_name].getValue()
+                        if abs(current_angle - target_angle) > 0.01:  # Tolerance
+                            all_at_initial = False
+                            break
+            
+            if all_at_initial:
+                break
+            
+            self.robot.step(self.timestep)
+        
+        self.apply_push_force()
         
         return self.get_observation()
     
