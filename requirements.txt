@@ -15,6 +15,7 @@ pygame>=2.5
 
 # Data
 pandas>=2.0
+tables>=3.9  # HDF5 support for multi-stage training stats
 
 # Utilities
 PyYAML>=6.0

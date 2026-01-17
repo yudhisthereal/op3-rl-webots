@@ -185,10 +185,21 @@ class SimplePPOCritic(nn.Module):
 class SimplePPOAgent:
     """CORRECT PPO agent implementation"""
     
-    def __init__(self, obs_dim, act_dim, config):
+    def __init__(self, obs_dim, act_dim, config, agent_id=None, parent_id=None):
+        """Initialize PPO agent.
+        
+        Args:
+            obs_dim: Observation dimension
+            act_dim: Action dimension
+            config: Configuration dictionary
+            agent_id: Unique agent identifier (auto-generated if None)
+            parent_id: Parent agent ID for lineage tracking
+        """
         self.obs_dim = obs_dim
         self.act_dim = act_dim
         self.config = config
+        self.agent_id = agent_id or f"ppo_{id(self)}"
+        self.parent_id = parent_id
         self.train_config = config["training"]["ppo"]
         
         # Networks
@@ -215,6 +226,10 @@ class SimplePPOAgent:
         
         # Experience buffer - now stores log_probs too!
         self.buffer = []
+        
+        # Lineage tracking
+        self.creation_timestamp = ""
+        self.lineage_depth = 0 if parent_id is None else 1
     
     def get_action(self, obs, deterministic=False):
         """Get action from actor network with proper distribution."""
@@ -370,25 +385,51 @@ class SimplePPOAgent:
         
         self.clear_buffer()
     
-    def save(self, filepath):
-        """Save the agent's networks to a file."""
-        torch.save({
+    def save(self, filepath, agent_id=None):
+        """Save the agent's networks to a file.
+        
+        Args:
+            filepath: Path to save checkpoint
+            agent_id: Optional agent ID to include in checkpoint
+        """
+        checkpoint = {
             'actor_state_dict': self.actor.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'obs_dim': self.obs_dim,
             'act_dim': self.act_dim,
             'config': self.config,
-        }, filepath)
-        print(f"✅ Model saved to {filepath}")
+            'agent_id': agent_id or self.agent_id,
+            'parent_id': self.parent_id,
+            'lineage_depth': self.lineage_depth,
+            'creation_timestamp': self.creation_timestamp,
+        }
+        torch.save(checkpoint, filepath)
+        print(f"✅ Model saved to {filepath} (agent_id: {checkpoint['agent_id']})")
     
     @classmethod
-    def load(cls, filepath):
-        """Load an agent from a saved checkpoint."""
+    def load(cls, filepath, agent_id=None):
+        """Load an agent from a saved checkpoint.
+        
+        Args:
+            filepath: Path to checkpoint file
+            agent_id: Optional agent ID override
+            
+        Returns:
+            SimplePPOAgent instance
+        """
         checkpoint = torch.load(filepath, map_location='cpu')
-        agent = cls(checkpoint['obs_dim'], checkpoint['act_dim'], checkpoint.get('config', CONFIG))
+        agent = cls(
+            checkpoint['obs_dim'], 
+            checkpoint['act_dim'], 
+            checkpoint.get('config', CONFIG),
+            agent_id=agent_id or checkpoint.get('agent_id'),
+            parent_id=checkpoint.get('parent_id')
+        )
         agent.actor.load_state_dict(checkpoint['actor_state_dict'])
         agent.critic.load_state_dict(checkpoint['critic_state_dict'])
-        print(f"✅ Model loaded from {filepath}")
+        agent.lineage_depth = checkpoint.get('lineage_depth', 0)
+        agent.creation_timestamp = checkpoint.get('creation_timestamp', '')
+        print(f"✅ Model loaded from {filepath} (agent_id: {agent.agent_id})")
         return agent
 
 

@@ -313,10 +313,21 @@ class ReplayBuffer:
 class DDPGAgent:
     """DDPG agent implementation"""
     
-    def __init__(self, obs_dim, act_dim, config):
+    def __init__(self, obs_dim, act_dim, config, agent_id=None, parent_id=None):
+        """Initialize DDPG agent.
+        
+        Args:
+            obs_dim: Observation dimension
+            act_dim: Action dimension
+            config: Configuration dictionary
+            agent_id: Unique agent identifier (auto-generated if None)
+            parent_id: Parent agent ID for lineage tracking
+        """
         self.obs_dim = obs_dim
         self.act_dim = act_dim
         self.config = config
+        self.agent_id = agent_id or f"ddpg_{id(self)}"
+        self.parent_id = parent_id
         ddpg_config = config["training"]["ddpg"]
         
         # Device
@@ -352,6 +363,10 @@ class DDPGAgent:
         
         # Training step counter
         self.train_step = 0
+        
+        # Lineage tracking
+        self.creation_timestamp = ""
+        self.lineage_depth = 0 if parent_id is None else 1
     
     def get_action(self, state, add_noise=True):
         """Get action from actor network with optional exploration noise."""
@@ -428,9 +443,14 @@ class DDPGAgent:
         self.train_step += 1
         return critic_loss.item(), actor_loss.item()
     
-    def save(self, filepath):
-        """Save the agent's networks to a file."""
-        torch.save({
+    def save(self, filepath, agent_id=None):
+        """Save the agent's networks to a file.
+        
+        Args:
+            filepath: Path to save checkpoint
+            agent_id: Optional agent ID to include in checkpoint
+        """
+        checkpoint = {
             'actor_state_dict': self.actor.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'actor_target_state_dict': self.actor_target.state_dict(),
@@ -439,22 +459,43 @@ class DDPGAgent:
             'act_dim': self.act_dim,
             'noise_std': self.noise_std,
             'config': self.config,
-        }, filepath)
-        print(f"✅ DDPG model saved to {filepath}")
+            'agent_id': agent_id or self.agent_id,
+            'parent_id': self.parent_id,
+            'lineage_depth': self.lineage_depth,
+            'creation_timestamp': self.creation_timestamp,
+        }
+        torch.save(checkpoint, filepath)
+        print(f"✅ DDPG model saved to {filepath} (agent_id: {checkpoint['agent_id']})")
     
     @classmethod
-    def load(cls, filepath):
-        """Load an agent from a saved checkpoint."""
+    def load(cls, filepath, agent_id=None):
+        """Load an agent from a saved checkpoint.
+        
+        Args:
+            filepath: Path to checkpoint file
+            agent_id: Optional agent ID override
+            
+        Returns:
+            DDPGAgent instance
+        """
         checkpoint = torch.load(filepath, map_location='cpu')
-        agent = cls(checkpoint['obs_dim'], checkpoint['act_dim'], checkpoint.get('config', CONFIG))
+        agent = cls(
+            checkpoint['obs_dim'], 
+            checkpoint['act_dim'], 
+            checkpoint.get('config', CONFIG),
+            agent_id=agent_id or checkpoint.get('agent_id'),
+            parent_id=checkpoint.get('parent_id')
+        )
         
         agent.actor.load_state_dict(checkpoint['actor_state_dict'])
         agent.critic.load_state_dict(checkpoint['critic_state_dict'])
         agent.actor_target.load_state_dict(checkpoint['actor_target_state_dict'])
         agent.critic_target.load_state_dict(checkpoint['critic_target_state_dict'])
         agent.noise_std = checkpoint.get('noise_std', 0.1)
+        agent.lineage_depth = checkpoint.get('lineage_depth', 0)
+        agent.creation_timestamp = checkpoint.get('creation_timestamp', '')
         
-        print(f"✅ DDPG model loaded from {filepath}")
+        print(f"✅ DDPG model loaded from {filepath} (agent_id: {agent.agent_id})")
         return agent
 
 
@@ -675,12 +716,46 @@ class ArmTrainingEnvironment:
 
 def train_mode(config):
     """Run DDPG training mode."""
+    # Check for multi-agent mode
+    is_multi_agent = os.environ.get('RL_MULTI_AGENT', '').lower() == 'true'
+    checkpoint_path = os.environ.get('RL_CHECKPOINT_PATH', None)
+    results_file = os.environ.get('RL_RESULTS_FILE', None)
+    episodes_per_run = int(os.environ.get('RL_EPISODES_PER_RUN', '1'))
+    agent_id = os.environ.get('RL_AGENT_ID', None)
+    stage_id = int(os.environ.get('RL_STAGE_ID', '0'))
+    global_episode = int(os.environ.get('RL_GLOBAL_EPISODE', '0'))
+    
+    # Override config with stage environment if provided
+    stage_env_str = os.environ.get('RL_STAGE_ENV', None)
+    if stage_env_str:
+        try:
+            stage_env = json.loads(stage_env_str)
+            if 'goal_angles' in stage_env:
+                config['goal_angles'] = stage_env['goal_angles']
+        except:
+            pass
+    
+    # Override hyperparameters with stage hyperparameters if provided
+    for key in ['actor_lr', 'critic_lr', 'gamma', 'tau']:
+        env_key = f'RL_HP_{key.upper()}'
+        if env_key in os.environ:
+            try:
+                config['training']['ddpg'][key] = float(os.environ[env_key])
+            except:
+                pass
+    
     print("\n" + "="*70)
-    print("🤖 OP3 ARM CONTROL - DDPG TRAINING")
+    if is_multi_agent:
+        print(f"🤖 OP3 ARM CONTROL - DDPG MULTI-AGENT TRAINING")
+        print(f"   Agent ID: {agent_id}")
+        print(f"   Stage ID: {stage_id}")
+        print(f"   Global Episode: {global_episode}")
+    else:
+        print("🤖 OP3 ARM CONTROL - DDPG TRAINING")
     print("="*70)
     print(f"Control joints: {config['control_joints']}")
     print(f"Goal angles: {config['goal_angles']}")
-    print(f"Max episodes: {config['training']['max_episodes']}")
+    print(f"Max episodes: {episodes_per_run if is_multi_agent else config['training']['max_episodes']}")
     print("="*70)
     
     robot = Supervisor()
@@ -688,10 +763,37 @@ def train_mode(config):
     # Create environment
     env = ArmTrainingEnvironment(robot, config)
     
-    # Create agent
-    agent = DDPGAgent(obs_dim=len(config["control_joints"]),
-                     act_dim=len(config["control_joints"]),
-                     config=config)
+    # Create or load agent
+    if is_multi_agent and checkpoint_path and os.path.exists(checkpoint_path):
+        # Try to load agent from checkpoint
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            # Check if this is a minimal "new agent" checkpoint
+            if checkpoint.get('is_new_agent', False) or 'actor_state_dict' not in checkpoint:
+                # This is a new agent marker - create new agent instead
+                print(f"📝 New agent detected from checkpoint marker, creating fresh agent (agent_id: {agent_id})")
+                agent = DDPGAgent(obs_dim=len(config["control_joints"]),
+                                 act_dim=len(config["control_joints"]),
+                                 config=config,
+                                 agent_id=agent_id)
+            else:
+                # Load existing agent from checkpoint
+                agent = DDPGAgent.load(checkpoint_path, agent_id=agent_id)
+                print(f"✅ Loaded agent from checkpoint: {checkpoint_path}")
+        except Exception as e:
+            print(f"⚠️  Error loading checkpoint {checkpoint_path}: {e}")
+            print(f"   Creating new agent instead...")
+            # Create new agent if loading fails
+            agent = DDPGAgent(obs_dim=len(config["control_joints"]),
+                             act_dim=len(config["control_joints"]),
+                             config=config,
+                             agent_id=agent_id)
+    else:
+        # Create new agent (single-agent mode or no checkpoint)
+        agent = DDPGAgent(obs_dim=len(config["control_joints"]),
+                         act_dim=len(config["control_joints"]),
+                         config=config,
+                         agent_id=agent_id)
     
     # Training statistics
     episode_rewards = []
@@ -703,12 +805,21 @@ def train_mode(config):
     start_time = time.time()
     best_reward = -float('inf')
     
-    max_episodes = config["training"]["max_episodes"]
-    save_every = config["checkpoints"]["save_every"]
-    early_stopping = config["early_stopping"]["enabled"]
-    window_size = config["early_stopping"]["window_size"]
-    success_threshold = config["early_stopping"]["success_threshold"]
-    min_episodes = config["early_stopping"]["min_episodes"]
+    if is_multi_agent:
+        max_episodes = episodes_per_run
+        save_every = max_episodes + 1  # Don't save mid-run in multi-agent mode
+        early_stopping = False  # Disable early stopping in multi-agent mode
+        window_size = 50
+        success_threshold = 0.0
+        min_episodes = 0
+        local_episode_id = 0  # Track local episode within this run
+    else:
+        max_episodes = config["training"]["max_episodes"]
+        save_every = config["checkpoints"]["save_every"]
+        early_stopping = config["early_stopping"]["enabled"]
+        window_size = config["early_stopping"]["window_size"]
+        success_threshold = config["early_stopping"]["success_threshold"]
+        min_episodes = config["early_stopping"]["min_episodes"]
     
     print("\n🏁 Starting DDPG training...")
     print("-"*70)
@@ -770,26 +881,51 @@ def train_mode(config):
         episode_rewards.append(total_reward)
         episode_steps.append(steps)
         episode_errors.append(avg_error)
+        
+        # In multi-agent mode, save results after each episode
+        if is_multi_agent and results_file:
+            local_episode_id = episode - 1
+            results = {
+                'agent_id': agent_id,
+                'stage_id': stage_id,
+                'global_episode_id': global_episode,
+                'local_episode_id': local_episode_id,
+                'total_reward': float(total_reward),
+                'steps': steps,
+                'success': bool(success),
+                'termination_reason': 'normal' if not done else 'time_limit',
+                'average_error': float(avg_error),
+                'start_idx': 0,  # Will be updated by stats logger
+                'end_idx': steps
+            }
+            with open(results_file, 'w') as f:
+                json.dump(results, f, indent=2)
+            print(f"✅ Saved results to {results_file}")
+            
+            # Save updated checkpoint
+            if checkpoint_path:
+                updated_checkpoint = checkpoint_path.replace('.pt', '_updated.pt')
+                agent.save(updated_checkpoint)
 
-        # Save detailed episode stats (matches PPO)
-        STATS_DIR = os.path.join(CONTROLLER_DIR, "training_stats")
-        episode_stats = {
-            'episode': episode,
-            'total_reward': float(total_reward),
-            'steps': steps,
-            'success': bool(success),
-            'average_error': float(avg_error),
-            'max_error': float(np.max(step_errors)) if step_errors else 0.0,
-            'min_error': float(np.min(step_errors)) if step_errors else 0.0,
-            'final_angles': {joint: float(env.sensors[joint].getValue() if joint in env.sensors else 0.0)
-                        for joint in config["control_joints"]},
-            'goal_angles': config["goal_angles"],
-            'step_rewards': step_rewards,
-            'step_errors': step_errors,
-            'step_actions': step_actions,
-        }
-
-        save_detailed_stats(episode_stats, episode, config, STATS_DIR)
+        # Save detailed episode stats (matches PPO) - only in single-agent mode
+        if not is_multi_agent:
+            STATS_DIR = os.path.join(CONTROLLER_DIR, "training_stats")
+            episode_stats = {
+                'episode': episode,
+                'total_reward': float(total_reward),
+                'steps': steps,
+                'success': bool(success),
+                'average_error': float(avg_error),
+                'max_error': float(np.max(step_errors)) if step_errors else 0.0,
+                'min_error': float(np.min(step_errors)) if step_errors else 0.0,
+                'final_angles': {joint: float(env.sensors[joint].getValue() if joint in env.sensors else 0.0)
+                            for joint in config["control_joints"]},
+                'goal_angles': config["goal_angles"],
+                'step_rewards': step_rewards,
+                'step_errors': step_errors,
+                'step_actions': step_actions,
+            }
+            save_detailed_stats(episode_stats, episode, config, STATS_DIR)
         
         # Calculate success rate
         if episode >= window_size:
@@ -866,7 +1002,13 @@ def train_mode(config):
     print(f"Stats saved to: {STATS_DIR}")
     print("="*70)
     
-    # Wait a bit before exiting
+    # In multi-agent mode, exit immediately after saving results
+    if is_multi_agent:
+        print(f"\n✅ Multi-agent training complete: {len(episode_rewards)} episodes")
+        robot.simulationQuit(0)
+        return
+    
+    # Wait a bit before exiting (single-agent mode only)
     for _ in range(50):
         robot.step(config["training"]["timestep"])
     
