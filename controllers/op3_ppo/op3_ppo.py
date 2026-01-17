@@ -25,20 +25,40 @@ sys.path.insert(0, PROJECT_ROOT)
 
 
 def load_config():
-    """Load configuration from JSON file, using template if available."""
-    config_path = os.path.join(CONTROLLER_DIR, "config.json")
-    template_path = os.path.join(CONTROLLER_DIR, "config.json.template")
+    """Load configuration from JSON file based on train/test mode.
+    
+    Uses RL_TRAIN environment variable (set by main.py):
+    - RL_TRAIN=true -> config_train.json (training mode)
+    - RL_TRAIN not set -> config_test.json (test mode)
+    - Falls back to config.json if neither exists
+    """
+    # Determine config file based on mode
+    is_train = os.environ.get('RL_TRAIN', '').lower() == 'true'
+    
+    if is_train:
+        config_path = os.path.join(CONTROLLER_DIR, "config_train.json")
+        template_path = os.path.join(CONTROLLER_DIR, "config_train.json.template")
+        mode_str = "training"
+    else:
+        config_path = os.path.join(CONTROLLER_DIR, "config_test.json")
+        template_path = os.path.join(CONTROLLER_DIR, "config_test.json.template")
+        mode_str = "testing"
+    
+    # Fall back to config.json if specific mode config doesn't exist
+    if not os.path.exists(config_path):
+        config_path = os.path.join(CONTROLLER_DIR, "config.json")
+        template_path = None
     
     if not os.path.exists(config_path):
         # Check if template exists, otherwise create default config
-        if os.path.exists(template_path):
+        if template_path and os.path.exists(template_path):
             print(f"Using template to create config: {template_path}")
             with open(template_path, 'r') as f:
                 config = json.load(f)
         else:
             # Create default config with push_force and initial_state
             config = {
-                "mode": "train",
+                "mode": mode_str,
                 "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
                 "control_joints": ["ShoulderR", "ArmUpperR", "ArmLowerR"],
                 "goal_angles": {
@@ -109,6 +129,8 @@ def load_config():
     
     with open(config_path, 'r') as f:
         config = json.load(f)
+    
+    print(f"Loaded {mode_str} config from: {config_path}")
     
     # Create directories
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
