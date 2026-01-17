@@ -100,3 +100,8 @@ controllers/*/*_results.json
 !controllers/op3_ddpg_env/README.md
 !controllers/op3_ddpg_env/op3_ddpg_env_reference.py
 
+# JSON config files (use templates instead)
+controllers/*/config.json
+controllers/angle_monitor/angle_presets.json
+controllers/angle_monitor/angle_state.json
+
