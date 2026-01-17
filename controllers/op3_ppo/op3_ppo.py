@@ -25,80 +25,87 @@ sys.path.insert(0, PROJECT_ROOT)
 
 
 def load_config():
-    """Load configuration from JSON file."""
+    """Load configuration from JSON file, using template if available."""
     config_path = os.path.join(CONTROLLER_DIR, "config.json")
+    template_path = os.path.join(CONTROLLER_DIR, "config.json.template")
     
     if not os.path.exists(config_path):
-        # Create default config with push_force and initial_state
-        default_config = {
-            "mode": "train",
-            "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
-            "control_joints": ["ShoulderR", "ArmUpperR", "ArmLowerR"],
-            "goal_angles": {
-                "ShoulderR": 1.0,
-                "ArmUpperR": -0.9,
-                "ArmLowerR": 0.4
-            },
-            "push_force": {
-                "enabled": False,
-                "force": 5.0,
-                "angle": 0.0,
-                "delay_steps": 20
-            },
-            "initial_state": {
-                "translation": [0.0, 0.0, 0.292665],
-                "rotation": [0.0, 0.0, 1.0, 0.0],
-                "joint_angles": {
-                    "ShoulderR": 0.0,
-                    "ArmUpperR": -1.0,
-                    "ArmLowerR": 0.57
-                }
-            },
-            "training": {
-                "max_episodes": 2000,
-                "max_steps": 200,
-                "timestep": 32,
-                "ppo": {
-                    "learning_rate": 3e-4,
-                    "gamma": 0.99,
-                    "clip_epsilon": 0.2,
-                    "num_epochs": 10,
-                    "batch_size": 64,
-                    "entropy_coeff": 0.01,
-                    "value_coeff": 0.5
+        # Check if template exists, otherwise create default config
+        if os.path.exists(template_path):
+            print(f"Using template to create config: {template_path}")
+            with open(template_path, 'r') as f:
+                config = json.load(f)
+        else:
+            # Create default config with push_force and initial_state
+            config = {
+                "mode": "train",
+                "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
+                "control_joints": ["ShoulderR", "ArmUpperR", "ArmLowerR"],
+                "goal_angles": {
+                    "ShoulderR": 1.0,
+                    "ArmUpperR": -0.9,
+                    "ArmLowerR": 0.4
                 },
-                "reward": {
-                    "angle_tolerance": 0.05,
-                    "time_penalty": -0.001,
-                    "success_reward": 10.0,
-                    "angle_error_weight": -1.0,
-                    "progress_bonus": 0.1,
-                    "stability_bonus": 0.1
+                "push_force": {
+                    "enabled": False,
+                    "force": 5.0,
+                    "angle": 0.0,
+                    "delay_steps": 20
                 },
-                "joint_limits": {
-                    "ShoulderR": [-1.57, 1.57],
-                    "ArmUpperR": [-1.57, 1.57],
-                    "ArmLowerR": [-1.57, 0.0]
+                "initial_state": {
+                    "translation": [0.0, 0.0, 0.292665],
+                    "rotation": [0.0, 0.0, 1.0, 0.0],
+                    "joint_angles": {
+                        "ShoulderR": 0.0,
+                        "ArmUpperR": -1.0,
+                        "ArmLowerR": 0.57
+                    }
+                },
+                "training": {
+                    "max_episodes": 2000,
+                    "max_steps": 200,
+                    "timestep": 32,
+                    "ppo": {
+                        "learning_rate": 3e-4,
+                        "gamma": 0.99,
+                        "clip_epsilon": 0.2,
+                        "num_epochs": 10,
+                        "batch_size": 64,
+                        "entropy_coeff": 0.01,
+                        "value_coeff": 0.5
+                    },
+                    "reward": {
+                        "angle_tolerance": 0.05,
+                        "time_penalty": -0.001,
+                        "success_reward": 10.0,
+                        "angle_error_weight": -1.0,
+                        "progress_bonus": 0.1,
+                        "stability_bonus": 0.1
+                    },
+                    "joint_limits": {
+                        "ShoulderR": [-1.57, 1.57],
+                        "ArmUpperR": [-1.57, 1.57],
+                        "ArmLowerR": [-1.57, 0.0]
+                    }
+                },
+                "early_stopping": {
+                    "enabled": True,
+                    "window_size": 100,
+                    "success_threshold": 1.0,
+                    "min_episodes": 200
+                },
+                "checkpoints": {
+                    "save_every": 100,
+                    "save_best": True
                 }
-            },
-            "early_stopping": {
-                "enabled": True,
-                "window_size": 100,
-                "success_threshold": 1.0,
-                "min_episodes": 200
-            },
-            "checkpoints": {
-                "save_every": 100,
-                "save_best": True
             }
-        }
         
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, 'w') as f:
-            json.dump(default_config, f, indent=2)
-        print(f"Created default config file: {config_path}")
+            json.dump(config, f, indent=2)
+        print(f"Created config file: {config_path}")
         
-        return default_config
+        return config
     
     with open(config_path, 'r') as f:
         config = json.load(f)

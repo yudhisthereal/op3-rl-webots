@@ -48,11 +48,23 @@ def main():
     
     # Initialize or load presets
     def load_presets():
-        """Load presets from file or create default."""
+        """Load presets from file, template, or create default."""
         if PRESETS_FILE.exists():
             try:
                 with open(PRESETS_FILE, 'r') as f:
                     return json.load(f)
+            except:
+                pass
+        
+        # Check if template exists
+        TEMPLATE_FILE = script_dir / "angle_presets.json.template"
+        if TEMPLATE_FILE.exists():
+            try:
+                print(f"Using template to create presets: {TEMPLATE_FILE}")
+                with open(TEMPLATE_FILE, 'r') as f:
+                    presets = json.load(f)
+                save_presets(presets)
+                return presets
             except:
                 pass
         

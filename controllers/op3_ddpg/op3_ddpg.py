@@ -29,74 +29,81 @@ sys.path.insert(0, PROJECT_ROOT)
 
 
 def load_config():
-    """Load configuration from JSON file."""
+    """Load configuration from JSON file, using template if available."""
     config_path = os.path.join(CONTROLLER_DIR, "config.json")
+    template_path = os.path.join(CONTROLLER_DIR, "config.json.template")
     
     if not os.path.exists(config_path):
-        # Create default config with push_force and initial_state
-        default_config = {
-            "mode": "train",
-            "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final.pt",
-            "control_joints": ["ShoulderR"],
-            "goal_angles": {
-                "ShoulderR": 1.0
-            },
-            "push_force": {
-                "enabled": False,
-                "force": 5.0,
-                "angle": 0.0,
-                "delay_steps": 20
-            },
-            "initial_state": {
-                "translation": [0.0, 0.0, 0.292665],
-                "rotation": [0.0, 0.0, 1.0, 0.0],
-                "joint_angles": {
-                    "ShoulderR": 0.0
-                }
-            },
-            "training": {
-                "max_episodes": 1000,
-                "max_steps": 200,
-                "timestep": 32,
-                "ddpg": {
-                    "actor_lr": 1e-4,
-                    "critic_lr": 1e-3,
-                    "gamma": 0.99,
-                    "tau": 0.005,
-                    "noise_std_start": 0.3,
-                    "noise_std_end": 0.01,
-                    "noise_decay": 0.995,
-                    "batch_size": 64,
-                    "replay_buffer_size": 100000
+        # Check if template exists, otherwise create default config
+        if os.path.exists(template_path):
+            print(f"Using template to create config: {template_path}")
+            with open(template_path, 'r') as f:
+                config = json.load(f)
+        else:
+            # Create default config with push_force and initial_state
+            config = {
+                "mode": "train",
+                "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final.pt",
+                "control_joints": ["ShoulderR"],
+                "goal_angles": {
+                    "ShoulderR": 1.0
                 },
-                "reward": {
-                    "angle_tolerance": 0.1,
-                    "success_reward": 10.0,
-                    "angle_error_weight": -1.0,
-                    "stability_bonus": 0.1
+                "push_force": {
+                    "enabled": False,
+                    "force": 5.0,
+                    "angle": 0.0,
+                    "delay_steps": 20
                 },
-                "joint_limits": {
-                    "ShoulderR": [-1.57, 1.57]
+                "initial_state": {
+                    "translation": [0.0, 0.0, 0.292665],
+                    "rotation": [0.0, 0.0, 1.0, 0.0],
+                    "joint_angles": {
+                        "ShoulderR": 0.0
+                    }
+                },
+                "training": {
+                    "max_episodes": 1000,
+                    "max_steps": 200,
+                    "timestep": 32,
+                    "ddpg": {
+                        "actor_lr": 1e-4,
+                        "critic_lr": 1e-3,
+                        "gamma": 0.99,
+                        "tau": 0.005,
+                        "noise_std_start": 0.3,
+                        "noise_std_end": 0.01,
+                        "noise_decay": 0.995,
+                        "batch_size": 64,
+                        "replay_buffer_size": 100000
+                    },
+                    "reward": {
+                        "angle_tolerance": 0.1,
+                        "success_reward": 10.0,
+                        "angle_error_weight": -1.0,
+                        "stability_bonus": 0.1
+                    },
+                    "joint_limits": {
+                        "ShoulderR": [-1.57, 1.57]
+                    }
+                },
+                "early_stopping": {
+                    "enabled": True,
+                    "window_size": 50,
+                    "success_threshold": 1.0,
+                    "min_episodes": 100
+                },
+                "checkpoints": {
+                    "save_every": 100,
+                    "save_best": True
                 }
-            },
-            "early_stopping": {
-                "enabled": True,
-                "window_size": 50,
-                "success_threshold": 1.0,
-                "min_episodes": 100
-            },
-            "checkpoints": {
-                "save_every": 100,
-                "save_best": True
             }
-        }
         
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, 'w') as f:
-            json.dump(default_config, f, indent=2)
-        print(f"Created default config file: {config_path}")
+            json.dump(config, f, indent=2)
+        print(f"Created config file: {config_path}")
         
-        return default_config
+        return config
     
     with open(config_path, 'r') as f:
         config = json.load(f)
