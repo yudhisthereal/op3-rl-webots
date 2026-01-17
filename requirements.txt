@@ -1,7 +1,23 @@
-torch>=2.2
-numpy
-tqdm
-pyyaml
-matplotlib
-pandas
-scipy
+# Core numeric & scientific
+numpy>=1.24
+scipy>=1.10
+sympy>=1.12
+
+# ML / RL
+torch>=2.1
+networkx>=3.0
+tqdm>=4.65
+
+# Vision & plotting
+matplotlib>=3.7
+pillow>=10.0
+pygame>=2.5
+
+# Data
+pandas>=2.0
+
+# Utilities
+PyYAML>=6.0
+packaging>=23.0
+typing_extensions>=4.7
+filelock>=3.12
