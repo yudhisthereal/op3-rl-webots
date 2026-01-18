@@ -1733,6 +1733,206 @@ class MultiAgentTrainer:
         return progress
 
 
+def _create_default_multi_agent_config():
+    """Create default multi-agent configuration dictionary.
+    
+    Returns:
+        dict: Default multi-agent configuration
+    """
+    return {
+        "multi_agent": {
+            "enabled": True,
+            "population_size": 8,
+            "num_stages": 3,
+            "selection_ratio": 0.5,
+            "mutation_sigma": 0.05,
+            "crossover_enabled": False,
+            "hyperparameter_mutation": True,
+            "elitism_count": 2,
+            "resample_count": 2,
+            "checkpoint_policy": "all"
+        },
+        "stage_definitions": [
+            {
+                "stage_id": 0,
+                "name": "pretrain",
+                "description": "Initial training with easy goals",
+                "episodes": 500,
+                "termination_criteria": {
+                    "min_episodes": 200,
+                    "target_success_rate": 0.7,
+                    "max_episodes": 800
+                },
+                "environment": {
+                    "goal_angles": {
+                        "ShoulderR": 0.5,
+                        "ShoulderL": -0.5,
+                        "ArmUpperR": -0.45,
+                        "ArmUpperL": 0.45,
+                        "ArmLowerR": 0.2,
+                        "ArmLowerL": -0.2,
+                        "LegUpperR": 0.28,
+                        "LegUpperL": -0.28,
+                        "LegLowerR": -0.3,
+                        "LegLowerL": 0.3
+                    },
+                    "push_force": {
+                        "enabled": True,
+                        "force": 5.0,
+                        "angle": 0.0,
+                        "delay_steps": 20
+                    }
+                },
+                "hyperparameters": {
+                    "learning_rate": 0.001,
+                    "gamma": 0.99,
+                    "clip_epsilon": 0.2
+                }
+            },
+            {
+                "stage_id": 1,
+                "name": "colearn",
+                "description": "Intermediate training with harder goals",
+                "episodes": 800,
+                "termination_criteria": {
+                    "min_episodes": 400,
+                    "target_success_rate": 0.75,
+                    "max_episodes": 1200
+                },
+                "environment": {
+                    "goal_angles": {
+                        "ShoulderR": 1.0,
+                        "ShoulderL": -1.0,
+                        "ArmUpperR": -0.9,
+                        "ArmUpperL": 0.9,
+                        "ArmLowerR": 0.4,
+                        "ArmLowerL": -0.4,
+                        "LegUpperR": 0.57,
+                        "LegUpperL": -0.57,
+                        "LegLowerR": -1.5,
+                        "LegLowerL": 1.5
+                    },
+                    "push_force": {
+                        "enabled": True,
+                        "force": 10.0,
+                        "angle": 0.0,
+                        "delay_steps": 15
+                    }
+                },
+                "hyperparameters": {
+                    "learning_rate": 0.0005,
+                    "gamma": 0.99,
+                    "clip_epsilon": 0.15
+                }
+            },
+            {
+                "stage_id": 2,
+                "name": "fine_tune",
+                "description": "Advanced training with full goal angles and external perturbations",
+                "episodes": 1500,
+                "termination_criteria": {
+                    "min_episodes": 800,
+                    "target_success_rate": 0.85,
+                    "max_episodes": 2000
+                },
+                "environment": {
+                    "goal_angles": {
+                        "ShoulderR": 1.0,
+                        "ShoulderL": -1.0,
+                        "ArmUpperR": -0.9,
+                        "ArmUpperL": 0.9,
+                        "ArmLowerR": 0.4,
+                        "ArmLowerL": -0.4,
+                        "LegUpperR": 0.57,
+                        "LegUpperL": -0.57,
+                        "LegLowerR": -1.5,
+                        "LegLowerL": 1.5
+                    },
+                    "push_force": {
+                        "enabled": True,
+                        "force": 20.0,
+                        "angle": 0.0,
+                        "delay_steps": 10,
+                        "variable_angle": True
+                    }
+                },
+                "hyperparameters": {
+                    "learning_rate": 0.0002,
+                    "gamma": 0.99,
+                    "clip_epsilon": 0.1
+                }
+            }
+        ],
+        "evaluation_metrics": [
+            "mean_reward",
+            "success_rate",
+            "mean_episode_length",
+            "convergence_speed",
+            "stability"
+        ],
+        "checkpoint_policy": {
+            "save_best_only": False,
+            "save_frequency": 100,
+            "save_all_stages": True,
+            "keep_top_k": 5
+        },
+        "logging": {
+            "hdf5_enabled": True,
+            "verbose": True,
+            "log_frequency": 10,
+            "tensorboard_enabled": False
+        },
+        "random_seed": 42,
+        "device": "cpu"
+    }
+
+
+def load_multi_agent_config(controller_dir: str) -> Dict:
+    """Load multi-agent configuration from JSON file.
+    
+    Order of precedence:
+    1. multi_agent_config.json (if exists, load it)
+    2. multi_agent_config.json.template (if exists, create from template)
+    3. Default config (create in-memory)
+    
+    Args:
+        controller_dir: Controller directory containing the config
+        
+    Returns:
+        dict: Configuration dictionary
+    """
+    config_path = os.path.join(controller_dir, "multi_agent_config.json")
+    template_path = os.path.join(controller_dir, "multi_agent_config.json.template")
+    
+    # If config exists, load it
+    if os.path.exists(config_path):
+        log_info("MultiAgentCore", f"Loading existing config: {config_path}")
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        log_success("MultiAgentCore", "Loaded multi-agent config")
+        return config
+    
+    # Config doesn't exist, try template
+    log_warning("MultiAgentCore", f"Config file not found: {config_path}")
+    
+    if os.path.exists(template_path):
+        log_info("MultiAgentCore", f"Creating config from template: {template_path}")
+        with open(template_path, 'r') as f:
+            config = json.load(f)
+    else:
+        # Create default config
+        log_info("MultiAgentCore", "Creating default multi-agent configuration")
+        config = _create_default_multi_agent_config()
+    
+    # Save the config file
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    log_success("MultiAgentCore", f"Created config file: {config_path}")
+    
+    return config
+
+
 def create_trainer(
     controller_dir: str,
     algorithm: str,
@@ -1756,18 +1956,8 @@ def create_trainer(
     with LogFunction("MultiAgentCore", "create_trainer",
                     args=(controller_dir, algorithm, seed, run_id)):
         
-        # Load multi-agent config
-        config_path = os.path.join(controller_dir, f"multi_agent_config.json")
-        
-        log_info("MultiAgentCore", f"Loading config from: {config_path}")
-        
-        try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            log_success("MultiAgentCore", "Loaded multi-agent config")
-        except Exception as e:
-            log_exception("MultiAgentCore", e, f"Failed to load config: {config_path}")
-            raise
+        # Load multi-agent config (with fallback to template or default)
+        config = load_multi_agent_config(controller_dir)
         
         trainer = MultiAgentTrainer(
             controller_dir=controller_dir,
