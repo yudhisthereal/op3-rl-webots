@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Multi-Stage Statistics Manager with HDF5 Support.
 
@@ -14,6 +13,13 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+# Import logging
+from logging_utils import (
+    log, log_info, log_warning, log_error, log_success, 
+    log_debug, log_data, log_exception, log_section,
+    start_timer, stop_timer, LogFunction
+)
 
 
 # HDF5 Description Definitions
@@ -139,109 +145,154 @@ class HDF5StatsLogger:
             complevel: Compression level (0-9)
             complib: Compression library
         """
-        self.filepath = filepath
-        self.mode = mode
+        log_section("HDF5StatsLogger", "INITIALIZING STATS LOGGER")
         
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Open/create HDF5 file
-        self.h5file = tables.open_file(
-            filepath,
-            mode=mode,
-            title="Multi-Stage Training Statistics",
-            filters=tables.Filters(
-                complevel=complevel,
-                complib=complib
+        with LogFunction("HDF5StatsLogger", "__init__",
+                        args=(filepath, mode, complevel, complib)):
+            
+            self.filepath = filepath
+            self.mode = mode
+            
+            log_info("HDF5StatsLogger", f"HDF5 file: {filepath}")
+            log_info("HDF5StatsLogger", f"Mode: {mode}")
+            log_info("HDF5StatsLogger", f"Compression: {complib} level {complevel}")
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            # Open/create HDF5 file
+            self.h5file = tables.open_file(
+                filepath,
+                mode=mode,
+                title="Multi-Stage Training Statistics",
+                filters=tables.Filters(
+                    complevel=complevel,
+                    complib=complib
+                )
             )
-        )
-        
-        # Initialize tables
-        self._init_tables()
-        
-        # Track counters
-        self._global_episode_counter = 0
-        self._global_timestep_counter = 0
-        self._current_stage_id = -1
-        
-        # Load existing counters if appending
-        if mode == 'a':
-            self._load_counters()
+            
+            # Initialize tables
+            self._init_tables()
+            
+            # Track counters
+            self._global_episode_counter = 0
+            self._global_timestep_counter = 0
+            self._current_stage_id = -1
+            
+            # Load existing counters if appending
+            if mode == 'a':
+                self._load_counters()
+            
+            log_data("HDF5StatsLogger", "Initial counters", {
+                "global_episode_counter": self._global_episode_counter,
+                "global_timestep_counter": self._global_timestep_counter,
+                "current_stage_id": self._current_stage_id
+            })
+            
+            log_success("HDF5StatsLogger", "Stats logger initialized")
     
     def _init_tables(self):
         """Initialize all required HDF5 tables."""
+        log_debug("HDF5StatsLogger", "Initializing HDF5 tables")
         
-        # Stages table
-        if 'stages' not in self.h5file.root:
-            self.stages_table = self.h5file.create_table(
-                self.h5file.root,
-                'stages',
-                STAGES_TABLE_DESC,
-                "Training stages"
-            )
-        else:
-            self.stages_table = self.h5file.root.stages
-        
-        # Episodes table
-        if 'episodes' not in self.h5file.root:
-            self.episodes_table = self.h5file.create_table(
-                self.h5file.root,
-                'episodes',
-                EPISODES_TABLE_DESC,
-                "Episode results"
-            )
-        else:
-            self.episodes_table = self.h5file.root.episodes
-        
-        # Timesteps table
-        if 'timesteps' not in self.h5file.root:
-            self.timesteps_table = self.h5file.create_table(
-                self.h5file.root,
-                'timesteps',
-                TIMESTEPS_TABLE_DESC,
-                "Per-timestep data"
-            )
-        else:
-            self.timesteps_table = self.h5file.root.timesteps
-        
-        # Agents table
-        if 'agents' not in self.h5file.root:
-            self.agents_table = self.h5file.create_table(
-                self.h5file.root,
-                'agents',
-                AGENTS_TABLE_DESC,
-                "Agent information"
-            )
-        else:
-            self.agents_table = self.h5file.root.agents
-        
-        # Stage metrics table
-        if 'stage_metrics' not in self.h5file.root:
-            self.stage_metrics_table = self.h5file.create_table(
-                self.h5file.root,
-                'stage_metrics',
-                STAGE_METRICS_TABLE_DESC,
-                "Aggregated stage metrics"
-            )
-        else:
-            self.stage_metrics_table = self.h5file.root.stage_metrics
+        try:
+            # Stages table
+            if 'stages' not in self.h5file.root:
+                self.stages_table = self.h5file.create_table(
+                    self.h5file.root,
+                    'stages',
+                    STAGES_TABLE_DESC,
+                    "Training stages"
+                )
+                log_debug("HDF5StatsLogger", "Created stages table")
+            else:
+                self.stages_table = self.h5file.root.stages
+                log_debug("HDF5StatsLogger", "Loaded existing stages table")
+            
+            # Episodes table
+            if 'episodes' not in self.h5file.root:
+                self.episodes_table = self.h5file.create_table(
+                    self.h5file.root,
+                    'episodes',
+                    EPISODES_TABLE_DESC,
+                    "Episode results"
+                )
+                log_debug("HDF5StatsLogger", "Created episodes table")
+            else:
+                self.episodes_table = self.h5file.root.episodes
+                log_debug("HDF5StatsLogger", "Loaded existing episodes table")
+            
+            # Timesteps table
+            if 'timesteps' not in self.h5file.root:
+                self.timesteps_table = self.h5file.create_table(
+                    self.h5file.root,
+                    'timesteps',
+                    TIMESTEPS_TABLE_DESC,
+                    "Per-timestep data"
+                )
+                log_debug("HDF5StatsLogger", "Created timesteps table")
+            else:
+                self.timesteps_table = self.h5file.root.timesteps
+                log_debug("HDF5StatsLogger", "Loaded existing timesteps table")
+            
+            # Agents table
+            if 'agents' not in self.h5file.root:
+                self.agents_table = self.h5file.create_table(
+                    self.h5file.root,
+                    'agents',
+                    AGENTS_TABLE_DESC,
+                    "Agent information"
+                )
+                log_debug("HDF5StatsLogger", "Created agents table")
+            else:
+                self.agents_table = self.h5file.root.agents
+                log_debug("HDF5StatsLogger", "Loaded existing agents table")
+            
+            # Stage metrics table
+            if 'stage_metrics' not in self.h5file.root:
+                self.stage_metrics_table = self.h5file.create_table(
+                    self.h5file.root,
+                    'stage_metrics',
+                    STAGE_METRICS_TABLE_DESC,
+                    "Aggregated stage metrics"
+                )
+                log_debug("HDF5StatsLogger", "Created stage_metrics table")
+            else:
+                self.stage_metrics_table = self.h5file.root.stage_metrics
+                log_debug("HDF5StatsLogger", "Loaded existing stage_metrics table")
+            
+            log_success("HDF5StatsLogger", "All tables initialized")
+            
+        except Exception as e:
+            log_exception("HDF5StatsLogger", e, "Failed to initialize tables")
+            raise
     
     def _load_counters(self):
         """Load existing counters from data."""
+        log_debug("HDF5StatsLogger", "Loading existing counters")
+        
         try:
             # Get max episode ID
             if len(self.episodes_table) > 0:
                 self._global_episode_counter = self.episodes_table.cols.global_episode_id[-1] + 1
+                log_debug("HDF5StatsLogger", f"Loaded global_episode_counter: {self._global_episode_counter}")
             
             # Get max timestep ID
             if len(self.timesteps_table) > 0:
                 self._global_timestep_counter = self.timesteps_table.cols.global_timestep[-1] + 1
+                log_debug("HDF5StatsLogger", f"Loaded global_timestep_counter: {self._global_timestep_counter}")
             
             # Get current stage
             if len(self.stages_table) > 0:
                 self._current_stage_id = self.stages_table.cols.stage_id[-1]
-        except Exception:
-            pass
+                log_debug("HDF5StatsLogger", f"Loaded current_stage_id: {self._current_stage_id}")
+                
+        except Exception as e:
+            log_exception("HDF5StatsLogger", e, "Failed to load counters")
+            # Reset counters on error
+            self._global_episode_counter = 0
+            self._global_timestep_counter = 0
+            self._current_stage_id = -1
     
     # ==================== Stage Methods ====================
     
@@ -258,23 +309,40 @@ class HDF5StatsLogger:
         Returns:
             Row index in table
         """
-        row = self.stages_table.row
-        
-        row['stage_id'] = stage_info.stage_id
-        row['stage_name'] = stage_info.stage_name
-        row['start_episode_global'] = stage_info.start_episode_global
-        row['end_episode_global'] = stage_info.end_episode_global or -1
-        row['timestamp'] = stage_info.timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row['status'] = stage_info.status
-        row['hyperparameters'] = json.dumps(stage_info.hyperparameters)
-        row['metrics'] = json.dumps(stage_info.metrics)
-        
-        row.append()
-        self.stages_table.flush()
-        
-        self._current_stage_id = stage_info.stage_id
-        
-        return len(self.stages_table) - 1
+        with LogFunction("HDF5StatsLogger", "log_stage",
+                        args=(),
+                        kwargs={'stage_id': stage_info.stage_id,
+                               'stage_name': stage_info.stage_name}):
+            
+            log_info("HDF5StatsLogger", f"Logging stage: {stage_info.stage_name} (ID: {stage_info.stage_id})")
+            
+            row = self.stages_table.row
+            
+            row['stage_id'] = stage_info.stage_id
+            row['stage_name'] = stage_info.stage_name
+            row['start_episode_global'] = stage_info.start_episode_global
+            row['end_episode_global'] = stage_info.end_episode_global or -1
+            row['timestamp'] = stage_info.timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            row['status'] = stage_info.status
+            row['hyperparameters'] = json.dumps(stage_info.hyperparameters)
+            row['metrics'] = json.dumps(stage_info.metrics)
+            
+            row.append()
+            self.stages_table.flush()
+            
+            self._current_stage_id = stage_info.stage_id
+            
+            row_index = len(self.stages_table) - 1
+            
+            log_success("HDF5StatsLogger", f"Logged stage {stage_info.stage_id} at row {row_index}")
+            log_data("HDF5StatsLogger", "Stage info", {
+                'stage_id': stage_info.stage_id,
+                'name': stage_info.stage_name,
+                'start_episode': stage_info.start_episode_global,
+                'status': stage_info.status
+            })
+            
+            return row_index
     
     def update_stage(
         self,
@@ -284,57 +352,73 @@ class HDF5StatsLogger:
         metrics: Optional[Dict] = None
     ):
         """Update stage information (e.g., on completion)."""
-        # In PyTables, we need to use modify_rows or append a new row
-        # Since row.update() doesn't exist, we'll read all data, modify, and rewrite
-        
-        if not self.stages_table.row:
-            return
-        
-        # Read all stages
-        stages_data = []
-        for i in range(len(self.stages_table)):
-            row = self.stages_table[i]
-            stages_data.append({
-                'stage_id': row['stage_id'],
-                'stage_name': row['stage_name'],
-                'start_episode_global': row['start_episode_global'],
-                'end_episode_global': row['end_episode_global'],
-                'timestamp': row['timestamp'],
-                'status': row['status'],
-                'hyperparameters': row['hyperparameters'],
-                'metrics': row['metrics']
+        with LogFunction("HDF5StatsLogger", "update_stage",
+                        args=(stage_id, end_episode_global, status),
+                        kwargs={'has_metrics': metrics is not None}):
+            
+            log_info("HDF5StatsLogger", f"Updating stage: {stage_id}")
+            
+            if not self.stages_table.row:
+                log_warning("HDF5StatsLogger", "Stages table has no rows")
+                return
+            
+            # Read all stages
+            stages_data = []
+            for i in range(len(self.stages_table)):
+                row = self.stages_table[i]
+                stages_data.append({
+                    'stage_id': row['stage_id'],
+                    'stage_name': row['stage_name'],
+                    'start_episode_global': row['start_episode_global'],
+                    'end_episode_global': row['end_episode_global'],
+                    'timestamp': row['timestamp'],
+                    'status': row['status'],
+                    'hyperparameters': row['hyperparameters'],
+                    'metrics': row['metrics']
+                })
+            
+            # Find and update the matching stage
+            stage_found = False
+            for i, data in enumerate(stages_data):
+                if data['stage_id'] == stage_id:
+                    if end_episode_global is not None:
+                        data['end_episode_global'] = end_episode_global
+                    if status is not None:
+                        data['status'] = status
+                    if metrics is not None:
+                        data['metrics'] = json.dumps(metrics)
+                    stage_found = True
+                    log_debug("HDF5StatsLogger", f"Found stage {stage_id} at index {i}")
+                    break
+            
+            if not stage_found:
+                log_warning("HDF5StatsLogger", f"Stage {stage_id} not found")
+                return
+            
+            # Clear and re-write the table
+            self.stages_table.remove_rows(0)
+            self.stages_table.flush()
+            
+            for data in stages_data:
+                row = self.stages_table.row
+                row['stage_id'] = data['stage_id']
+                row['stage_name'] = data['stage_name']
+                row['start_episode_global'] = data['start_episode_global']
+                row['end_episode_global'] = data['end_episode_global']
+                row['timestamp'] = data['timestamp']
+                row['status'] = data['status']
+                row['hyperparameters'] = data['hyperparameters']
+                row['metrics'] = data['metrics']
+                row.append()
+            
+            self.stages_table.flush()
+            
+            log_success("HDF5StatsLogger", f"Updated stage {stage_id}")
+            log_data("HDF5StatsLogger", "Update details", {
+                'end_episode': end_episode_global,
+                'status': status,
+                'has_metrics': metrics is not None
             })
-        
-        # Find and update the matching stage
-        for i, data in enumerate(stages_data):
-            if data['stage_id'] == stage_id:
-                if end_episode_global is not None:
-                    data['end_episode_global'] = end_episode_global
-                if status is not None:
-                    data['status'] = status
-                if metrics is not None:
-                    data['metrics'] = json.dumps(metrics)
-                break
-        else:
-            return  # Stage not found
-        
-        # Clear and re-write the table
-        self.stages_table.remove_rows(0)
-        self.stages_table.flush()
-        
-        for data in stages_data:
-            row = self.stages_table.row
-            row['stage_id'] = data['stage_id']
-            row['stage_name'] = data['stage_name']
-            row['start_episode_global'] = data['start_episode_global']
-            row['end_episode_global'] = data['end_episode_global']
-            row['timestamp'] = data['timestamp']
-            row['status'] = data['status']
-            row['hyperparameters'] = data['hyperparameters']
-            row['metrics'] = data['metrics']
-            row.append()
-        
-        self.stages_table.flush()
     
     # ==================== Episode Methods ====================
     
@@ -351,29 +435,47 @@ class HDF5StatsLogger:
         Returns:
             Global episode ID
         """
-        row = self.episodes_table.row
-        
-        # Use provided global ID or auto-increment
-        global_ep_id = episode_info.global_episode_id
-        if global_ep_id < 0:
-            global_ep_id = self._global_episode_counter
-            self._global_episode_counter += 1
-        
-        row['global_episode_id'] = global_ep_id
-        row['stage_id'] = episode_info.stage_id
-        row['local_episode_id'] = episode_info.local_episode_id
-        row['total_steps'] = episode_info.total_steps
-        row['total_reward'] = episode_info.total_reward
-        row['success'] = episode_info.success
-        row['termination_reason'] = episode_info.termination_reason
-        row['agent_id'] = episode_info.agent_id
-        row['start_idx'] = episode_info.start_idx
-        row['end_idx'] = episode_info.end_idx
-        
-        row.append()
-        self.episodes_table.flush()
-        
-        return global_ep_id
+        with LogFunction("HDF5StatsLogger", "log_episode",
+                        args=(),
+                        kwargs={'stage_id': episode_info.stage_id,
+                               'agent_id': episode_info.agent_id,
+                               'total_reward': episode_info.total_reward}):
+            
+            log_info("HDF5StatsLogger", f"Logging episode: stage={episode_info.stage_id}, agent={episode_info.agent_id}")
+            
+            row = self.episodes_table.row
+            
+            # Use provided global ID or auto-increment
+            global_ep_id = episode_info.global_episode_id
+            if global_ep_id < 0:
+                global_ep_id = self._global_episode_counter
+                self._global_episode_counter += 1
+            
+            row['global_episode_id'] = global_ep_id
+            row['stage_id'] = episode_info.stage_id
+            row['local_episode_id'] = episode_info.local_episode_id
+            row['total_steps'] = episode_info.total_steps
+            row['total_reward'] = episode_info.total_reward
+            row['success'] = episode_info.success
+            row['termination_reason'] = episode_info.termination_reason
+            row['agent_id'] = episode_info.agent_id
+            row['start_idx'] = episode_info.start_idx
+            row['end_idx'] = episode_info.end_idx
+            
+            row.append()
+            self.episodes_table.flush()
+            
+            log_success("HDF5StatsLogger", f"Logged episode {global_ep_id}")
+            log_data("HDF5StatsLogger", "Episode details", {
+                'global_id': global_ep_id,
+                'stage_id': episode_info.stage_id,
+                'agent_id': episode_info.agent_id,
+                'reward': episode_info.total_reward,
+                'success': episode_info.success,
+                'steps': episode_info.total_steps
+            })
+            
+            return global_ep_id
     
     def log_timesteps(
         self,
@@ -400,38 +502,56 @@ class HDF5StatsLogger:
         Returns:
             (start_timestep_idx, end_timestep_idx)
         """
-        if dones is None:
-            dones = [False] * len(rewards)
-            dones[-1] = True
-        
-        start_idx = self._global_timestep_counter
-        
-        for t, (reward, action, done) in enumerate(zip(rewards, actions, dones)):
-            row = self.timesteps_table.row
+        with LogFunction("HDF5StatsLogger", "log_timesteps",
+                        args=(global_episode_id, stage_id, local_episode_id, agent_id),
+                        kwargs={'num_rewards': len(rewards),
+                               'num_actions': len(actions)}):
             
-            row['global_episode_id'] = global_episode_id
-            row['stage_id'] = stage_id
-            row['local_timestep'] = t
-            row['global_timestep'] = self._global_timestep_counter
-            row['reward'] = reward
+            log_info("HDF5StatsLogger", f"Logging timesteps: episode={global_episode_id}, agent={agent_id}")
             
-            # Pad/truncate action to max size
-            action_padded = np.zeros(10, dtype=np.float32)
-            action_padded[:len(action)] = action
-            row['action'] = action_padded
+            if dones is None:
+                dones = [False] * len(rewards)
+                if rewards:
+                    dones[-1] = True
             
-            row['agent_id'] = agent_id
-            row['done'] = done
+            start_idx = self._global_timestep_counter
             
-            row.append()
+            log_debug("HDF5StatsLogger", f"Starting at timestep index: {start_idx}")
+            log_debug("HDF5StatsLogger", f"Logging {len(rewards)} timesteps")
             
-            self._global_timestep_counter += 1
-        
-        self.timesteps_table.flush()
-        
-        end_idx = self._global_timestep_counter - 1
-        
-        return start_idx, end_idx
+            for t, (reward, action, done) in enumerate(zip(rewards, actions, dones)):
+                row = self.timesteps_table.row
+                
+                row['global_episode_id'] = global_episode_id
+                row['stage_id'] = stage_id
+                row['local_timestep'] = t
+                row['global_timestep'] = self._global_timestep_counter
+                row['reward'] = reward
+                
+                # Pad/truncate action to max size
+                action_padded = np.zeros(10, dtype=np.float32)
+                action_padded[:len(action)] = action
+                row['action'] = action_padded
+                
+                row['agent_id'] = agent_id
+                row['done'] = done
+                
+                row.append()
+                
+                self._global_timestep_counter += 1
+            
+            self.timesteps_table.flush()
+            
+            end_idx = self._global_timestep_counter - 1
+            
+            log_success("HDF5StatsLogger", f"Logged {len(rewards)} timesteps")
+            log_data("HDF5StatsLogger", "Timestep range", {
+                'start_idx': start_idx,
+                'end_idx': end_idx,
+                'num_timesteps': len(rewards)
+            })
+            
+            return start_idx, end_idx
     
     # ==================== Agent Methods ====================
     
@@ -440,18 +560,34 @@ class HDF5StatsLogger:
         agent_info: AgentInfo
     ):
         """Log agent information."""
-        row = self.agents_table.row
-        
-        row['agent_id'] = agent_info.agent_id
-        row['stage_id'] = agent_info.stage_id
-        row['agent_type'] = agent_info.agent_type
-        row['parameters_hash'] = agent_info.parameters_hash
-        row['parent_id'] = agent_info.parent_id
-        row['creation_timestamp'] = agent_info.creation_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row['lineage_depth'] = agent_info.lineage_depth
-        
-        row.append()
-        self.agents_table.flush()
+        with LogFunction("HDF5StatsLogger", "log_agent",
+                        args=(),
+                        kwargs={'agent_id': agent_info.agent_id,
+                               'stage_id': agent_info.stage_id}):
+            
+            log_info("HDF5StatsLogger", f"Logging agent: {agent_info.agent_id}")
+            
+            row = self.agents_table.row
+            
+            row['agent_id'] = agent_info.agent_id
+            row['stage_id'] = agent_info.stage_id
+            row['agent_type'] = agent_info.agent_type
+            row['parameters_hash'] = agent_info.parameters_hash
+            row['parent_id'] = agent_info.parent_id
+            row['creation_timestamp'] = agent_info.creation_timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            row['lineage_depth'] = agent_info.lineage_depth
+            
+            row.append()
+            self.agents_table.flush()
+            
+            log_success("HDF5StatsLogger", f"Logged agent: {agent_info.agent_id}")
+            log_data("HDF5StatsLogger", "Agent info", {
+                'agent_id': agent_info.agent_id,
+                'stage_id': agent_info.stage_id,
+                'agent_type': agent_info.agent_type,
+                'parent_id': agent_info.parent_id,
+                'lineage_depth': agent_info.lineage_depth
+            })
     
     # ==================== Stage Metrics Methods ====================
     
@@ -464,16 +600,23 @@ class HDF5StatsLogger:
         timestamp: Optional[str] = None
     ):
         """Log aggregated stage metric."""
-        row = self.stage_metrics_table.row
-        
-        row['stage_id'] = stage_id
-        row['metric_name'] = metric_name
-        row['window_size'] = window_size
-        row['value'] = value
-        row['timestamp'] = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        row.append()
-        self.stage_metrics_table.flush()
+        with LogFunction("HDF5StatsLogger", "log_stage_metric",
+                        args=(stage_id, metric_name, value, window_size)):
+            
+            log_info("HDF5StatsLogger", f"Logging metric: stage={stage_id}, metric={metric_name}, value={value}")
+            
+            row = self.stage_metrics_table.row
+            
+            row['stage_id'] = stage_id
+            row['metric_name'] = metric_name
+            row['window_size'] = window_size
+            row['value'] = value
+            row['timestamp'] = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            row.append()
+            self.stage_metrics_table.flush()
+            
+            log_debug("HDF5StatsLogger", f"Logged metric {metric_name}={value} for stage {stage_id}")
     
     def log_stage_summary(
         self,
@@ -484,90 +627,130 @@ class HDF5StatsLogger:
         window_size: int = 100
     ):
         """Log complete stage summary."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        self.log_stage_metric(stage_id, 'mean_reward', mean_reward, window_size, timestamp)
-        self.log_stage_metric(stage_id, 'success_rate', success_rate, window_size, timestamp)
-        self.log_stage_metric(stage_id, 'mean_episode_length', mean_episode_length, window_size, timestamp)
+        with LogFunction("HDF5StatsLogger", "log_stage_summary",
+                        args=(stage_id, mean_reward, success_rate, mean_episode_length, window_size)):
+            
+            log_info("HDF5StatsLogger", f"Logging stage summary: stage={stage_id}")
+            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            self.log_stage_metric(stage_id, 'mean_reward', mean_reward, window_size, timestamp)
+            self.log_stage_metric(stage_id, 'success_rate', success_rate, window_size, timestamp)
+            self.log_stage_metric(stage_id, 'mean_episode_length', mean_episode_length, window_size, timestamp)
+            
+            log_success("HDF5StatsLogger", f"Logged stage {stage_id} summary")
+            log_data("HDF5StatsLogger", "Stage summary", {
+                'stage_id': stage_id,
+                'mean_reward': mean_reward,
+                'success_rate': success_rate,
+                'mean_episode_length': mean_episode_length,
+                'window_size': window_size
+            })
     
     # ==================== Query Methods ====================
     
     def get_stage_stats(self, stage_id: int) -> Dict:
         """Get statistics for a specific stage."""
-        # Get stage info
-        stage_data = None
-        for i in range(len(self.stages_table)):
-            if self.stages_table[i]['stage_id'] == stage_id:
-                row = self.stages_table[i]
-                stage_data = {
-                    'stage_id': row['stage_id'],
-                    'stage_name': row['stage_name'],
-                    'start_episode': row['start_episode_global'],
-                    'end_episode': row['end_episode_global'],
-                    'status': row['status'],
-                    'hyperparameters': json.loads(row['hyperparameters']),
-                    'metrics': json.loads(row['metrics'])
-                }
-                break
-        
-        if stage_data is None:
-            return {}
-        
-        # Get episode stats for this stage
-        episodes = self.episodes_table.where(f'stage_id == {stage_id}')
-        
-        rewards = []
-        successes = []
-        lengths = []
-        
-        for ep in episodes:
-            rewards.append(ep['total_reward'])
-            successes.append(ep['success'])
-            lengths.append(ep['total_steps'])
-        
-        stage_data['num_episodes'] = len(rewards)
-        stage_data['mean_reward'] = float(np.mean(rewards)) if rewards else 0.0
-        stage_data['std_reward'] = float(np.std(rewards)) if rewards else 0.0
-        stage_data['success_rate'] = float(np.mean(successes)) if successes else 0.0
-        stage_data['mean_episode_length'] = float(np.mean(lengths)) if lengths else 0.0
-        
-        return stage_data
+        with LogFunction("HDF5StatsLogger", "get_stage_stats", args=(stage_id,)):
+            log_info("HDF5StatsLogger", f"Getting stats for stage: {stage_id}")
+            
+            # Get stage info
+            stage_data = None
+            for i in range(len(self.stages_table)):
+                if self.stages_table[i]['stage_id'] == stage_id:
+                    row = self.stages_table[i]
+                    stage_data = {
+                        'stage_id': row['stage_id'],
+                        'stage_name': row['stage_name'],
+                        'start_episode': row['start_episode_global'],
+                        'end_episode': row['end_episode_global'],
+                        'status': row['status'],
+                        'hyperparameters': json.loads(row['hyperparameters']),
+                        'metrics': json.loads(row['metrics'])
+                    }
+                    break
+            
+            if stage_data is None:
+                log_warning("HDF5StatsLogger", f"Stage {stage_id} not found")
+                return {}
+            
+            # Get episode stats for this stage
+            episodes = self.episodes_table.where(f'stage_id == {stage_id}')
+            
+            rewards = []
+            successes = []
+            lengths = []
+            
+            for ep in episodes:
+                rewards.append(ep['total_reward'])
+                successes.append(ep['success'])
+                lengths.append(ep['total_steps'])
+            
+            stage_data['num_episodes'] = len(rewards)
+            stage_data['mean_reward'] = float(np.mean(rewards)) if rewards else 0.0
+            stage_data['std_reward'] = float(np.std(rewards)) if rewards else 0.0
+            stage_data['success_rate'] = float(np.mean(successes)) if successes else 0.0
+            stage_data['mean_episode_length'] = float(np.mean(lengths)) if lengths else 0.0
+            
+            log_data("HDF5StatsLogger", f"Stage {stage_id} stats", {
+                'num_episodes': stage_data['num_episodes'],
+                'mean_reward': stage_data['mean_reward'],
+                'success_rate': stage_data['success_rate']
+            })
+            
+            return stage_data
     
     def get_agent_lineage(self, agent_id: str) -> List[Dict]:
         """Trace lineage of an agent back to ancestors."""
-        lineage = []
-        
-        current_id = agent_id
-        while current_id:
-            # Find agent in table
-            found = False
-            for i in range(len(self.agents_table)):
-                row = self.agents_table[i]
-                if row['agent_id'] == current_id:
-                    lineage.append({
-                        'agent_id': row['agent_id'],
-                        'stage_id': row['stage_id'],
-                        'parent_id': row['parent_id'],
-                        'lineage_depth': row['lineage_depth'],
-                        'timestamp': row['creation_timestamp']
-                    })
-                    current_id = row['parent_id']
-                    found = True
+        with LogFunction("HDF5StatsLogger", "get_agent_lineage", args=(agent_id,)):
+            log_info("HDF5StatsLogger", f"Getting lineage for agent: {agent_id}")
+            
+            lineage = []
+            
+            current_id = agent_id
+            max_depth = 20  # Prevent infinite loops
+            
+            while current_id and len(lineage) < max_depth:
+                # Find agent in table
+                found = False
+                for i in range(len(self.agents_table)):
+                    row = self.agents_table[i]
+                    if row['agent_id'] == current_id:
+                        lineage.append({
+                            'agent_id': row['agent_id'],
+                            'stage_id': row['stage_id'],
+                            'parent_id': row['parent_id'],
+                            'lineage_depth': row['lineage_depth'],
+                            'timestamp': row['creation_timestamp']
+                        })
+                        current_id = row['parent_id']
+                        found = True
+                        break
+                
+                if not found:
                     break
             
-            if not found:
-                break
-        
-        return lineage
+            log_info("HDF5StatsLogger", f"Found lineage of length {len(lineage)} for agent {agent_id}")
+            log_data("HDF5StatsLogger", "Lineage", lineage)
+            
+            return lineage
     
     def get_all_agents_in_stage(self, stage_id: int) -> List[str]:
         """Get all unique agent IDs in a stage."""
-        agents = set()
-        
-        for ep in self.episodes_table.where(f'stage_id == {stage_id}'):
-            agents.add(ep['agent_id'])
-        
-        return list(agents)
+        with LogFunction("HDF5StatsLogger", "get_all_agents_in_stage", args=(stage_id,)):
+            log_info("HDF5StatsLogger", f"Getting agents in stage: {stage_id}")
+            
+            agents = set()
+            
+            for ep in self.episodes_table.where(f'stage_id == {stage_id}'):
+                agents.add(ep['agent_id'])
+            
+            agent_list = list(agents)
+            
+            log_info("HDF5StatsLogger", f"Found {len(agent_list)} agents in stage {stage_id}")
+            log_data("HDF5StatsLogger", "Agent IDs", agent_list)
+            
+            return agent_list
     
     def get_episodes_for_agent(
         self,
@@ -575,25 +758,34 @@ class HDF5StatsLogger:
         stage_id: Optional[int] = None
     ) -> List[Dict]:
         """Get all episodes for a specific agent."""
-        episodes = []
-        
-        if stage_id is not None:
-            condition = f'(stage_id == {stage_id}) & (agent_id == b"{agent_id}")'
-        else:
-            condition = f'agent_id == b"{agent_id}"'
-        
-        for ep in self.episodes_table.where(condition):
-            episodes.append({
-                'global_episode_id': ep['global_episode_id'],
-                'stage_id': ep['stage_id'],
-                'local_episode_id': ep['local_episode_id'],
-                'total_steps': ep['total_steps'],
-                'total_reward': ep['total_reward'],
-                'success': ep['success'],
-                'termination_reason': ep['termination_reason']
-            })
-        
-        return episodes
+        with LogFunction("HDF5StatsLogger", "get_episodes_for_agent",
+                        args=(agent_id,),
+                        kwargs={'stage_id': stage_id}):
+            
+            log_info("HDF5StatsLogger", f"Getting episodes for agent: {agent_id}, stage: {stage_id}")
+            
+            episodes = []
+            
+            if stage_id is not None:
+                condition = f'(stage_id == {stage_id}) & (agent_id == b"{agent_id}")'
+            else:
+                condition = f'agent_id == b"{agent_id}"'
+            
+            for ep in self.episodes_table.where(condition):
+                episodes.append({
+                    'global_episode_id': ep['global_episode_id'],
+                    'stage_id': ep['stage_id'],
+                    'local_episode_id': ep['local_episode_id'],
+                    'total_steps': ep['total_steps'],
+                    'total_reward': ep['total_reward'],
+                    'success': ep['success'],
+                    'termination_reason': ep['termination_reason']
+                })
+            
+            log_info("HDF5StatsLogger", f"Found {len(episodes)} episodes for agent {agent_id}")
+            log_data("HDF5StatsLogger", "Episode count", len(episodes))
+            
+            return episodes
     
     def get_best_agent_in_stage(
         self,
@@ -601,115 +793,157 @@ class HDF5StatsLogger:
         metric: str = 'total_reward'
     ) -> Tuple[Optional[str], float]:
         """Get best performing agent in a stage."""
-        agent_scores = {}
-        
-        for ep in self.episodes_table.where(f'stage_id == {stage_id}'):
-            agent_id = ep['agent_id']
-            score = ep[metric]
+        with LogFunction("HDF5StatsLogger", "get_best_agent_in_stage",
+                        args=(stage_id, metric)):
             
-            if agent_id not in agent_scores:
-                agent_scores[agent_id] = []
-            agent_scores[agent_id].append(score)
-        
-        if not agent_scores:
-            return None, 0.0
-        
-        # Average score per agent
-        agent_avgs = {k: np.mean(v) for k, v in agent_scores.items()}
-        
-        best_agent = max(agent_avgs, key=agent_avgs.get)
-        best_score = agent_avgs[best_agent]
-        
-        return best_agent, best_score
+            log_info("HDF5StatsLogger", f"Getting best agent in stage {stage_id} by {metric}")
+            
+            agent_scores = {}
+            
+            for ep in self.episodes_table.where(f'stage_id == {stage_id}'):
+                agent_id = ep['agent_id']
+                score = ep[metric]
+                
+                if agent_id not in agent_scores:
+                    agent_scores[agent_id] = []
+                agent_scores[agent_id].append(score)
+            
+            if not agent_scores:
+                log_warning("HDF5StatsLogger", f"No episodes found for stage {stage_id}")
+                return None, 0.0
+            
+            # Average score per agent
+            agent_avgs = {k: np.mean(v) for k, v in agent_scores.items()}
+            
+            best_agent = max(agent_avgs, key=agent_avgs.get)
+            best_score = agent_avgs[best_agent]
+            
+            log_success("HDF5StatsLogger", f"Best agent in stage {stage_id}: {best_agent} (score: {best_score})")
+            log_data("HDF5StatsLogger", "Agent scores", {
+                'best_agent': best_agent,
+                'best_score': best_score,
+                'num_agents': len(agent_avgs)
+            })
+            
+            return best_agent, best_score
     
     def get_progress(self) -> Dict:
         """Get overall training progress."""
-        progress = {
-            'total_episodes': len(self.episodes_table),
-            'total_timesteps': len(self.timesteps_table),
-            'current_stage': self._current_stage_id,
-            'stages_completed': 0,
-            'stages_in_progress': 0
-        }
-        
-        # Count stages by status
-        for i in range(len(self.stages_table)):
-            row = self.stages_table[i]
-            if row['status'] == 'completed':
-                progress['stages_completed'] += 1
-            else:
-                progress['stages_in_progress'] += 1
-        
-        return progress
+        with LogFunction("HDF5StatsLogger", "get_progress"):
+            log_info("HDF5StatsLogger", "Getting training progress")
+            
+            progress = {
+                'total_episodes': len(self.episodes_table),
+                'total_timesteps': len(self.timesteps_table),
+                'current_stage': self._current_stage_id,
+                'stages_completed': 0,
+                'stages_in_progress': 0
+            }
+            
+            # Count stages by status
+            for i in range(len(self.stages_table)):
+                row = self.stages_table[i]
+                if row['status'] == 'completed':
+                    progress['stages_completed'] += 1
+                else:
+                    progress['stages_in_progress'] += 1
+            
+            log_data("HDF5StatsLogger", "Training progress", progress)
+            
+            return progress
     
     # ==================== Export Methods ====================
     
     def export_episodes_csv(self, filepath: str, stage_id: Optional[int] = None):
         """Export episodes to CSV format."""
-        import csv
-        
-        with open(filepath, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                'global_episode_id', 'stage_id', 'local_episode_id',
-                'total_steps', 'total_reward', 'success',
-                'termination_reason', 'agent_id'
-            ])
+        with LogFunction("HDF5StatsLogger", "export_episodes_csv",
+                        args=(filepath,),
+                        kwargs={'stage_id': stage_id}):
             
-            if stage_id is not None:
-                episodes = self.episodes_table.where(f'stage_id == {stage_id}')
-            else:
-                episodes = self.episodes_table.iterrows()
+            log_info("HDF5StatsLogger", f"Exporting episodes to CSV: {filepath}")
             
-            for ep in episodes:
+            import csv
+            
+            with open(filepath, 'w', newline='') as f:
+                writer = csv.writer(f)
                 writer.writerow([
-                    ep['global_episode_id'],
-                    ep['stage_id'],
-                    ep['local_episode_id'],
-                    ep['total_steps'],
-                    ep['total_reward'],
-                    ep['success'],
-                    ep['termination_reason'],
-                    ep['agent_id']
+                    'global_episode_id', 'stage_id', 'local_episode_id',
+                    'total_steps', 'total_reward', 'success',
+                    'termination_reason', 'agent_id'
                 ])
+                
+                if stage_id is not None:
+                    episodes = self.episodes_table.where(f'stage_id == {stage_id}')
+                else:
+                    episodes = self.episodes_table.iterrows()
+                
+                episode_count = 0
+                for ep in episodes:
+                    writer.writerow([
+                        ep['global_episode_id'],
+                        ep['stage_id'],
+                        ep['local_episode_id'],
+                        ep['total_steps'],
+                        ep['total_reward'],
+                        ep['success'],
+                        ep['termination_reason'],
+                        ep['agent_id']
+                    ])
+                    episode_count += 1
+                
+                log_success("HDF5StatsLogger", f"Exported {episode_count} episodes to {filepath}")
     
     def get_dataframe(self, table_name: str):
         """Get table as pandas DataFrame (requires pandas)."""
-        try:
-            import pandas as pd
-        except ImportError:
-            raise ImportError("pandas is required for DataFrame export")
-        
-        if table_name == 'stages':
-            table = self.stages_table
-        elif table_name == 'episodes':
-            table = self.episodes_table
-        elif table_name == 'timesteps':
-            table = self.timesteps_table
-        elif table_name == 'agents':
-            table = self.agents_table
-        elif table_name == 'stage_metrics':
-            table = self.stage_metrics_table
-        else:
-            raise ValueError(f"Unknown table: {table_name}")
-        
-        return pd.DataFrame(table.read())
+        with LogFunction("HDF5StatsLogger", "get_dataframe", args=(table_name,)):
+            log_info("HDF5StatsLogger", f"Getting DataFrame for table: {table_name}")
+            
+            try:
+                import pandas as pd
+            except ImportError:
+                log_error("HDF5StatsLogger", "pandas is required for DataFrame export")
+                raise ImportError("pandas is required for DataFrame export")
+            
+            if table_name == 'stages':
+                table = self.stages_table
+            elif table_name == 'episodes':
+                table = self.episodes_table
+            elif table_name == 'timesteps':
+                table = self.timesteps_table
+            elif table_name == 'agents':
+                table = self.agents_table
+            elif table_name == 'stage_metrics':
+                table = self.stage_metrics_table
+            else:
+                log_error("HDF5StatsLogger", f"Unknown table: {table_name}")
+                raise ValueError(f"Unknown table: {table_name}")
+            
+            df = pd.DataFrame(table.read())
+            
+            log_success("HDF5StatsLogger", f"Created DataFrame with {len(df)} rows")
+            log_data("HDF5StatsLogger", "DataFrame shape", df.shape)
+            
+            return df
     
     # ==================== Context Manager ====================
     
     def __enter__(self):
         """Context manager entry."""
+        log_debug("HDF5StatsLogger", "Entering context manager")
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - ensures proper cleanup."""
+        log_debug("HDF5StatsLogger", "Exiting context manager")
         self.close()
         return False
     
     def close(self):
         """Close HDF5 file properly."""
         if hasattr(self, 'h5file') and self.h5file.isopen:
+            log_info("HDF5StatsLogger", "Closing HDF5 file")
             self.h5file.close()
+            log_success("HDF5StatsLogger", "HDF5 file closed")
     
     def __del__(self):
         """Destructor - ensure file is closed."""
@@ -730,23 +964,34 @@ def create_stats_logger(
     Returns:
         HDF5StatsLogger instance
     """
-    # Create runs directory
-    runs_dir = os.path.join(controller_dir, "runs")
-    os.makedirs(runs_dir, exist_ok=True)
-    
-    # Generate timestamp
-    timestamp = datetime.now().strftime("%H.%M.%S-%d.%m.%y")
-    run_dir = os.path.join(runs_dir, f"{algorithm}_{timestamp}")
-    os.makedirs(run_dir, exist_ok=True)
-    
-    # Create stats subdirectory
-    stats_dir = os.path.join(run_dir, "stats")
-    os.makedirs(stats_dir, exist_ok=True)
-    
-    # Create HDF5 file
-    hdf5_path = os.path.join(stats_dir, "training_stats.h5")
-    
-    return HDF5StatsLogger(hdf5_path, mode='w')
+    with LogFunction("StatsManager", "create_stats_logger",
+                    args=(controller_dir, algorithm)):
+        
+        log_info("StatsManager", f"Creating stats logger for algorithm: {algorithm}")
+        
+        # Create runs directory
+        runs_dir = os.path.join(controller_dir, "runs")
+        os.makedirs(runs_dir, exist_ok=True)
+        
+        # Generate timestamp
+        timestamp = datetime.now().strftime("%H.%M.%S-%d.%m.%y")
+        run_dir = os.path.join(runs_dir, f"{algorithm}_{timestamp}")
+        os.makedirs(run_dir, exist_ok=True)
+        
+        # Create stats subdirectory
+        stats_dir = os.path.join(run_dir, "stats")
+        os.makedirs(stats_dir, exist_ok=True)
+        
+        # Create HDF5 file
+        hdf5_path = os.path.join(stats_dir, "training_stats.h5")
+        
+        log_info("StatsManager", f"Creating HDF5 file: {hdf5_path}")
+        
+        logger = HDF5StatsLogger(hdf5_path, mode='w')
+        
+        log_success("StatsManager", f"Created stats logger at: {hdf5_path}")
+        
+        return logger
 
 
 def get_latest_run(controller_dir: str, algorithm: str) -> Optional[str]:
@@ -760,22 +1005,30 @@ def get_latest_run(controller_dir: str, algorithm: str) -> Optional[str]:
     Returns:
         Path to latest run directory or None
     """
-    runs_dir = os.path.join(controller_dir, "runs")
-    
-    if not os.path.exists(runs_dir):
-        return None
-    
-    runs = [d for d in os.listdir(runs_dir) 
-            if os.path.isdir(os.path.join(runs_dir, d)) 
-            and d.startswith(algorithm + "_")]
-    
-    if not runs:
-        return None
-    
-    # Sort by modification time
-    runs.sort(key=lambda x: os.path.getmtime(os.path.join(runs_dir, x)))
-    
-    return os.path.join(runs_dir, runs[-1])
+    with LogFunction("StatsManager", "get_latest_run", args=(controller_dir, algorithm)):
+        log_info("StatsManager", f"Getting latest run for algorithm: {algorithm}")
+        
+        runs_dir = os.path.join(controller_dir, "runs")
+        
+        if not os.path.exists(runs_dir):
+            log_warning("StatsManager", f"Runs directory not found: {runs_dir}")
+            return None
+        
+        runs = [d for d in os.listdir(runs_dir) 
+                if os.path.isdir(os.path.join(runs_dir, d)) 
+                and d.startswith(algorithm + "_")]
+        
+        if not runs:
+            log_warning("StatsManager", f"No runs found for algorithm: {algorithm}")
+            return None
+        
+        # Sort by modification time
+        runs.sort(key=lambda x: os.path.getmtime(os.path.join(runs_dir, x)))
+        latest_run = os.path.join(runs_dir, runs[-1])
+        
+        log_info("StatsManager", f"Found {len(runs)} runs, latest: {latest_run}")
+        
+        return latest_run
 
 
 def get_latest_checkpoint(
@@ -794,39 +1047,52 @@ def get_latest_checkpoint(
     Returns:
         Path to checkpoint or None
     """
-    checkpoints_dir = os.path.join(run_dir, "checkpoints")
-    
-    if not os.path.exists(checkpoints_dir):
-        return None
-    
-    checkpoints = []
-    
-    for stage_subdir in os.listdir(checkpoints_dir):
-        if stage_id is not None:
-            if not stage_subdir.startswith(f"stage_{stage_id}"):
-                continue
+    with LogFunction("StatsManager", "get_latest_checkpoint",
+                    args=(run_dir,),
+                    kwargs={'stage_id': stage_id, 'agent_id': agent_id}):
         
-        stage_path = os.path.join(checkpoints_dir, stage_subdir)
-        if not os.path.isdir(stage_path):
-            continue
+        log_info("StatsManager", f"Getting latest checkpoint in: {run_dir}")
         
-        for agent_subdir in os.listdir(stage_path):
-            if agent_id is not None:
-                if agent_subdir != agent_id:
+        checkpoints_dir = os.path.join(run_dir, "checkpoints")
+        
+        if not os.path.exists(checkpoints_dir):
+            log_warning("StatsManager", f"Checkpoints directory not found: {checkpoints_dir}")
+            return None
+        
+        checkpoints = []
+        
+        for stage_subdir in os.listdir(checkpoints_dir):
+            if stage_id is not None:
+                if not stage_subdir.startswith(f"stage_{stage_id}"):
                     continue
             
-            agent_path = os.path.join(stage_path, agent_subdir)
-            if not os.path.isdir(agent_path):
+            stage_path = os.path.join(checkpoints_dir, stage_subdir)
+            if not os.path.isdir(stage_path):
                 continue
             
-            for f in os.listdir(agent_path):
-                if f.endswith('.pt'):
-                    checkpoints.append(os.path.join(agent_path, f))
-    
-    if not checkpoints:
-        return None
-    
-    # Return most recent
-    checkpoints.sort(key=lambda x: os.path.getmtime(x))
-    return checkpoints[-1]
-
+            for agent_subdir in os.listdir(stage_path):
+                if agent_id is not None:
+                    if agent_subdir != agent_id:
+                        continue
+                
+                agent_path = os.path.join(stage_path, agent_subdir)
+                if not os.path.isdir(agent_path):
+                    continue
+                
+                for f in os.listdir(agent_path):
+                    if f.endswith('.pt'):
+                        checkpoint_path = os.path.join(agent_path, f)
+                        checkpoints.append(checkpoint_path)
+                        log_debug("StatsManager", f"Found checkpoint: {checkpoint_path}")
+        
+        if not checkpoints:
+            log_warning("StatsManager", "No checkpoints found")
+            return None
+        
+        # Return most recent
+        checkpoints.sort(key=lambda x: os.path.getmtime(x))
+        latest = checkpoints[-1]
+        
+        log_info("StatsManager", f"Latest checkpoint: {latest}")
+        
+        return latest

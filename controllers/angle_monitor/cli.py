@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Simple CLI for OP3 Angle Monitor
 Usage: python angle_monitor_cli.py

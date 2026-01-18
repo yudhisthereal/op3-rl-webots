@@ -1,5 +1,4 @@
-# controllers/op3_ppo/op3_ppo.py (CORRECTED)
-#!/usr/bin/env python3
+# controllers/op3_ppo/op3_ppo.py
 """
 OP3 PPO Controller - CORRECTED VERSION with proper PPO implementation
 """

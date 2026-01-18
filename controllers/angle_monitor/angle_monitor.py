@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Angle Monitor Controller for OP3 Robot
 Monitors joint angles and applies presets from CLI.

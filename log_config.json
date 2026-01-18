@@ -1,0 +1,18 @@
+{
+  "show_info": true,
+  "show_warning": true,
+  "show_error": true,
+  "show_debug": false,
+  "show_success": true,
+  "show_data": true,
+  "show_timing": true,
+  "use_colors": true,
+  "timestamp_format": "%Y-%m-%d %H:%M:%S",
+  "log_file": "logs/training.log",
+  "max_message_length": 2000,
+  "indent_size": 2,
+  "caller_max_length": 20,
+  "log_to_file": true,
+  "file_mode": "a",
+  "file_encoding": "utf-8"
+}
