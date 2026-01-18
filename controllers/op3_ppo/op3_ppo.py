@@ -15,12 +15,128 @@ import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
 
-# Add project root to path
+# ============================================================================
+# CONSTANTS AND PATHS
+# ============================================================================
+
+# Directory constants
 CONTROLLER_DIR = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINT_DIR = os.path.join(CONTROLLER_DIR, "checkpoints")
 STATS_DIR = os.path.join(CONTROLLER_DIR, "training_stats")
 PROJECT_ROOT = os.path.abspath(os.path.join(CONTROLLER_DIR, '..', '..'))
+
+# Add project root to path
 sys.path.insert(0, PROJECT_ROOT)
+
+
+# ============================================================================
+# CONFIGURATION LOADING
+# ============================================================================
+
+def _create_default_config(mode_str):
+    """Create default configuration dictionary.
+    
+    Args:
+        mode_str: Either "train" or "test"
+        
+    Returns:
+        dict: Default configuration
+    """
+    if mode_str == "train":
+        return {
+            "mode": "train",
+            "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
+            "control_joints": ["ShoulderR"],
+            "goal_angles": {
+                "ShoulderR": 1.0
+            },
+            "push_force": {
+                "enabled": False,
+                "force": 5.0,
+                "angle": 0.0,
+                "delay_steps": 20
+            },
+            "initial_state": {
+                "translation": [0.0, 0.0, 0.292665],
+                "rotation": [0.0, 0.0, 1.0, 0.0],
+                "joint_angles": {
+                    "ShoulderR": 0.0
+                }
+            },
+            "training": {
+                "max_episodes": 2000,
+                "max_steps": 200,
+                "timestep": 32,
+                "ppo": {
+                    "learning_rate": 3e-4,
+                    "gamma": 0.99,
+                    "clip_epsilon": 0.2,
+                    "num_epochs": 10,
+                    "batch_size": 64,
+                    "entropy_coeff": 0.01,
+                    "value_coeff": 0.5
+                },
+                "reward": {
+                    "angle_tolerance": 0.05,
+                    "time_penalty": -0.001,
+                    "success_reward": 10.0,
+                    "angle_error_weight": -1.0,
+                    "progress_bonus": 0.1,
+                    "stability_bonus": 0.1
+                },
+                "joint_limits": {
+                    "ShoulderR": [-1.57, 1.57]
+                }
+            },
+            "early_stopping": {
+                "enabled": True,
+                "window_size": 100,
+                "success_threshold": 1.0,
+                "min_episodes": 200
+            },
+            "checkpoints": {
+                "save_every": 100,
+                "save_best": True
+            }
+        }
+    else:
+        return {
+            "mode": "test",
+            "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
+            "control_joints": ["ShoulderR"],
+            "goal_angles": {
+                "ShoulderR": 1.0
+            },
+            "push_force": {
+                "enabled": False,
+                "force": 5.0,
+                "angle": 0.0,
+                "delay_steps": 20
+            },
+            "initial_state": {
+                "translation": [0.0, 0.0, 0.292665],
+                "rotation": [0.0, 0.0, 1.0, 0.0],
+                "joint_angles": {
+                    "ShoulderR": 0.0
+                }
+            },
+            "test": {
+                "max_steps": 30,
+                "timestep": 32,
+                "render": True,
+                "sleep_time": 0.01
+            },
+            "reward": {
+                "angle_tolerance": 0.05,
+                "time_penalty": -0.01,
+                "success_reward": 1.0,
+                "angle_error_weight": -1.0,
+                "stability_bonus": 0.1
+            },
+            "joint_limits": {
+                "ShoulderR": [-1.57, 1.57]
+            }
+        }
 
 
 def load_config():
@@ -30,6 +146,11 @@ def load_config():
     - RL_TRAIN=true -> config_train.json (training mode)
     - RL_TRAIN not set -> config_test.json (test mode)
     - Falls back to config.json if neither exists
+    - Falls back to template if config.json doesn't exist
+    - Falls back to default config if template doesn't exist
+    
+    Returns:
+        dict: Configuration dictionary
     """
     # Determine config file based on mode
     is_train = os.environ.get('RL_TRAIN', '').lower() == 'true'
@@ -37,107 +158,61 @@ def load_config():
     if is_train:
         config_path = os.path.join(CONTROLLER_DIR, "config_train.json")
         template_path = os.path.join(CONTROLLER_DIR, "config_train.json.template")
-        mode_str = "training"
+        mode_str = "train"
+        print(f"🤖 PPO Controller - Running in TRAINING mode")
     else:
         config_path = os.path.join(CONTROLLER_DIR, "config_test.json")
         template_path = os.path.join(CONTROLLER_DIR, "config_test.json.template")
-        mode_str = "testing"
-    
-    # Fall back to config.json if specific mode config doesn't exist
-    if not os.path.exists(config_path):
-        config_path = os.path.join(CONTROLLER_DIR, "config.json")
-        template_path = None
-    
-    if not os.path.exists(config_path):
-        # Check if template exists, otherwise create default config
-        if template_path and os.path.exists(template_path):
-            print(f"Using template to create config: {template_path}")
-            with open(template_path, 'r') as f:
-                config = json.load(f)
-        else:
-            # Create default config with push_force and initial_state
-            config = {
-                "mode": mode_str,
-                "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
-                "control_joints": ["ShoulderR", "ArmUpperR", "ArmLowerR"],
-                "goal_angles": {
-                    "ShoulderR": 1.0,
-                    "ArmUpperR": -0.9,
-                    "ArmLowerR": 0.4
-                },
-                "push_force": {
-                    "enabled": False,
-                    "force": 5.0,
-                    "angle": 0.0,
-                    "delay_steps": 20
-                },
-                "initial_state": {
-                    "translation": [0.0, 0.0, 0.292665],
-                    "rotation": [0.0, 0.0, 1.0, 0.0],
-                    "joint_angles": {
-                        "ShoulderR": 0.0,
-                        "ArmUpperR": -1.0,
-                        "ArmLowerR": 0.57
-                    }
-                },
-                "training": {
-                    "max_episodes": 2000,
-                    "max_steps": 200,
-                    "timestep": 32,
-                    "ppo": {
-                        "learning_rate": 3e-4,
-                        "gamma": 0.99,
-                        "clip_epsilon": 0.2,
-                        "num_epochs": 10,
-                        "batch_size": 64,
-                        "entropy_coeff": 0.01,
-                        "value_coeff": 0.5
-                    },
-                    "reward": {
-                        "angle_tolerance": 0.05,
-                        "time_penalty": -0.001,
-                        "success_reward": 10.0,
-                        "angle_error_weight": -1.0,
-                        "progress_bonus": 0.1,
-                        "stability_bonus": 0.1
-                    },
-                    "joint_limits": {
-                        "ShoulderR": [-1.57, 1.57],
-                        "ArmUpperR": [-1.57, 1.57],
-                        "ArmLowerR": [-1.57, 0.0]
-                    }
-                },
-                "early_stopping": {
-                    "enabled": True,
-                    "window_size": 100,
-                    "success_threshold": 1.0,
-                    "min_episodes": 200
-                },
-                "checkpoints": {
-                    "save_every": 100,
-                    "save_best": True
-                }
-            }
-        
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
-        with open(config_path, 'w') as f:
-            json.dump(config, f, indent=2)
-        print(f"Created config file: {config_path}")
-        
-        return config
-    
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    
-    print(f"Loaded {mode_str} config from: {config_path}")
+        mode_str = "test"
+        print(f"🤖 PPO Controller - Running in TESTING mode")
     
     # Create directories
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     os.makedirs(STATS_DIR, exist_ok=True)
     
+    # Check if config file exists
+    if not os.path.exists(config_path):
+        print(f"⚠️  Config file not found: {config_path}")
+        
+        # Try fallback to config.json
+        fallback_path = os.path.join(CONTROLLER_DIR, "config.json")
+        if os.path.exists(fallback_path):
+            config_path = fallback_path
+            print(f"ℹ️  Using fallback config: {config_path}")
+        else:
+            # Check if template exists
+            if template_path and os.path.exists(template_path):
+                print(f"📄 Creating config from template: {template_path}")
+                with open(template_path, 'r') as f:
+                    config = json.load(f)
+            else:
+                # Create default config
+                print(f"🔧 Creating default configuration")
+                config = _create_default_config(mode_str)
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            
+            # Save the config file
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            print(f"✅ Created config file: {config_path}")
+    
+    # Load the config file
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    
+    print(f"✅ Loaded config from: {config_path}")
+    
     # Update model path to be absolute
-    if not os.path.isabs(config["model_path"]):
+    if not os.path.isabs(config.get("model_path", "")):
         config["model_path"] = os.path.join(PROJECT_ROOT, config["model_path"])
+    
+    # Log control joints
+    if "control_joints" in config:
+        print(f"🎯 Control joints: {config['control_joints']}")
+    if "goal_angles" in config:
+        print(f"📍 Goal angles: {config['goal_angles']}")
     
     return config
 
