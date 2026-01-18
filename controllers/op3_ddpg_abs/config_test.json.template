@@ -1,15 +1,15 @@
 {
   "mode": "test",
-  "model_path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
+  "model_path": "controllers/op3_ddpg_abs/checkpoints/ddpg_final.pt",
   
   "test_models": [
     {
-      "path": "controllers/op3_ppo/checkpoints/ppo_best.pt",
+      "path": "controllers/op3_ddpg_abs/checkpoints/ddpg_best.pt",
       "episodes": 10,
       "name": "Best Model"
     },
     {
-      "path": "controllers/op3_ppo/checkpoints/ppo_final.pt",
+      "path": "controllers/op3_ddpg_abs/checkpoints/ddpg_final.pt",
       "episodes": 10,
       "name": "Final Model"
     }
@@ -41,7 +41,7 @@
   
   "push_force": {
     "enabled": false,
-    "force": 5.0,
+    "force": 20.0,
     "angle": 0.0,
     "delay_steps": 20
   },
@@ -65,17 +65,18 @@
   
   "test": {
     "max_steps": 30,
-    "timestep": 8,
+    "timestep": 32,
     "render": true,
     "sleep_time": 0.01
   },
   
   "reward": {
     "angle_tolerance": 0.025,
-    "time_penalty": -0.01,
-    "success_reward": 1.0,
+    "success_reward": 10.0,
     "angle_error_weight": -1.0,
-    "stability_bonus": 0.1
+    "stability_bonus": 0.1,
+    "overshoot_penalty": -0.5,
+    "action_smoothness_weight": -0.01
   },
   
   "joint_limits": {
@@ -91,4 +92,3 @@
     "LegLowerL": [0.00, 1.57]
   }
 }
-

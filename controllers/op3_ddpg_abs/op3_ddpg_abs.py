@@ -1,7 +1,6 @@
 """
-OP3 DDPG Controller - Fast learning for joint angle control
-Trains ShoulderR (or multiple joints) to reach and maintain target angles
-Uses DDPG (Deep Deterministic Policy Gradient) algorithm
+OP3 DDPG Controller - Absolute angle control
+Uses DDPG to output absolute joint angles directly
 """
 
 from controller import Supervisor
@@ -59,7 +58,7 @@ def _create_default_config(mode_str):
     if mode_str == "train":
         return {
             "mode": "train",
-            "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final.pt",
+            "model_path": "controllers/op3_ddpg_abs/checkpoints/ddpg_final.pt",
             "control_joints": ["ShoulderR"],
             "goal_angles": {
                 "ShoulderR": 1.0
@@ -96,7 +95,9 @@ def _create_default_config(mode_str):
                     "angle_tolerance": 0.1,
                     "success_reward": 10.0,
                     "angle_error_weight": -1.0,
-                    "stability_bonus": 0.1
+                    "stability_bonus": 0.1,
+                    "overshoot_penalty": -0.5,
+                    "action_smoothness_weight": -0.01
                 },
                 "joint_limits": {
                     "ShoulderR": [-1.57, 1.57]
@@ -116,7 +117,7 @@ def _create_default_config(mode_str):
     else:
         return {
             "mode": "test",
-            "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final.pt",
+            "model_path": "controllers/op3_ddpg_abs/checkpoints/ddpg_final.pt",
             "control_joints": ["ShoulderR"],
             "goal_angles": {
                 "ShoulderR": 1.0
@@ -143,7 +144,9 @@ def _create_default_config(mode_str):
                 "angle_tolerance": 0.1,
                 "success_reward": 10.0,
                 "angle_error_weight": -1.0,
-                "stability_bonus": 0.1
+                "stability_bonus": 0.1,
+                "overshoot_penalty": -0.5,
+                "action_smoothness_weight": -0.01
             },
             "joint_limits": {
                 "ShoulderR": [-1.57, 1.57]
@@ -152,18 +155,7 @@ def _create_default_config(mode_str):
 
 
 def load_config():
-    """Load configuration from JSON file based on train/test mode.
-    
-    Uses RL_TRAIN environment variable (set by main.py):
-    - RL_TRAIN=true -> config_train.json (training mode)
-    - RL_TRAIN not set -> config_test.json (test mode)
-    - Falls back to config.json if neither exists
-    - Falls back to template if config.json doesn't exist
-    - Falls back to default config if template doesn't exist
-    
-    Returns:
-        dict: Configuration dictionary
-    """
+    """Load configuration from JSON file based on train/test mode."""
     with LogFunction("DDPGController", "load_config"):
         log_info("DDPGController", "Loading configuration")
         
@@ -207,9 +199,6 @@ def load_config():
                     log_info("DDPGController", "Creating default configuration")
                     config = _create_default_config(mode_str)
                 
-                # Ensure directory exists
-                os.makedirs(os.path.dirname(config_path), exist_ok=True)
-                
                 # Save the config file
                 with open(config_path, 'w') as f:
                     json.dump(config, f, indent=2)
@@ -220,17 +209,12 @@ def load_config():
             config = json.load(f)
         
         log_success("DDPGController", f"Loaded config from: {config_path}")
-        log_data("DDPGController", "Config keys", list(config.keys()))
         
         # Update model path to be absolute
         if not os.path.isabs(config.get("model_path", "")):
             config["model_path"] = os.path.join(PROJECT_ROOT, config["model_path"])
         
         log_data("DDPGController", "Model path", config["model_path"])
-        
-        # Log control joints
-        if "control_joints" in config:
-            log_data("DDPGController", "Control joints", config["control_joints"])
         
         return config
 
@@ -244,7 +228,7 @@ CONFIG = load_config()
 # ============================================================================
 
 def save_detailed_stats(episode_stats, episode_num):
-    """Save detailed training statistics - matches PPO format exactly."""
+    """Save detailed training statistics."""
     with LogFunction("DDPGController", "save_detailed_stats", args=(episode_num,)):
         
         log_info("DDPGController", f"Saving detailed stats for episode {episode_num}")
@@ -281,7 +265,7 @@ def save_detailed_stats(episode_stats, episode_num):
 
 def generate_training_plots(episode_rewards, episode_steps, success_history, 
                            episode_errors, save_dir):
-    """Generate and save training plots - matches PPO format."""
+    """Generate and save training plots."""
     with LogFunction("DDPGController", "generate_training_plots", args=(save_dir,)):
         
         log_info("DDPGController", f"Generating training plots in: {save_dir}")
@@ -371,7 +355,7 @@ def generate_training_plots(episode_rewards, episode_steps, success_history,
 # ============================================================================
 
 class Actor(nn.Module):
-    """Actor network: observation → action"""
+    """Actor network: observation → absolute joint angles"""
     def __init__(self, obs_dim, act_dim, hidden_dim=256):
         super().__init__()
         log_info("Actor", f"Initializing actor network: input={obs_dim}, output={act_dim}, hidden={hidden_dim}")
@@ -381,7 +365,7 @@ class Actor(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, act_dim),
-            nn.Tanh()  # Output in [-1, 1]
+            nn.Tanh()  # Output in [-1, 1] for scaling to joint limits
         )
         log_success("Actor", "Actor network initialized")
     
@@ -451,30 +435,31 @@ class ReplayBuffer:
 # ============================================================================
 
 class DDPGAgent:
-    """DDPG agent implementation"""
+    """DDPG agent implementation for absolute angle control"""
     
     def __init__(self, obs_dim, act_dim, agent_id=None, parent_id=None):
         """Initialize DDPG agent.
         
         Args:
-            obs_dim: Observation dimension
-            act_dim: Action dimension
+            obs_dim: Observation dimension (angle errors)
+            act_dim: Action dimension (absolute joint angles)
             agent_id: Unique agent identifier (auto-generated if None)
             parent_id: Parent agent ID for lineage tracking
         """
-        log_section("DDPGAgent", "INITIALIZING DDPG AGENT")
+        log_section("DDPGAgent", "INITIALIZING DDPG AGENT (ABSOLUTE)")
         
         with LogFunction("DDPGAgent", "__init__", args=(obs_dim, act_dim, agent_id, parent_id)):
             
             self.obs_dim = obs_dim
             self.act_dim = act_dim
-            self.agent_id = agent_id or f"ddpg_{id(self)}"
+            self.agent_id = agent_id or f"ddpg_abs_{id(self)}"
             self.parent_id = parent_id
             ddpg_config = CONFIG["training"]["ddpg"]
             
             log_info("DDPGAgent", f"Agent ID: {self.agent_id}")
             log_info("DDPGAgent", f"Parent ID: {self.parent_id}")
             log_info("DDPGAgent", f"Observation dim: {obs_dim}, Action dim: {act_dim}")
+            log_info("DDPGAgent", f"Action represents ABSOLUTE joint angles")
             log_data("DDPGAgent", "DDPG config", ddpg_config)
             
             # Device
@@ -504,7 +489,7 @@ class DDPGAgent:
             self.tau = ddpg_config["tau"]
             self.batch_size = ddpg_config["batch_size"]
             
-            # Exploration noise
+            # Exploration noise (for absolute angles)
             self.noise_std = ddpg_config["noise_std_start"]
             self.noise_std_end = ddpg_config["noise_std_end"]
             self.noise_decay = ddpg_config["noise_decay"]
@@ -518,26 +503,30 @@ class DDPGAgent:
             self.creation_timestamp = ""
             self.lineage_depth = 0 if parent_id is None else 1
             
+            # Track previous action for smoothness reward
+            self.prev_action = None
+            
             log_success("DDPGAgent", f"DDPG agent initialized: {self.agent_id}")
     
     def get_action(self, state, add_noise=True):
-        """Get action from actor network with optional exploration noise."""
+        """Get absolute joint angles from actor network with optional exploration noise."""
         log_debug("DDPGAgent", f"get_action: state shape={state.shape}, add_noise={add_noise}")
         
         state_t = torch.FloatTensor(state).to(self.device).unsqueeze(0)
         
         with torch.no_grad():
+            # Actor outputs normalized absolute angles in [-1, 1]
             action = self.actor(state_t).cpu().numpy().squeeze()
         
         log_debug("DDPGAgent", f"Base action (no noise): {action}")
         
         if add_noise:
-            # Add exploration noise (Ornstein-Uhlenbeck would be better, but Gaussian is simpler)
+            # Add exploration noise to absolute angles
             noise = np.random.normal(0, self.noise_std, size=action.shape)
             action = np.clip(action + noise, -1.0, 1.0)
             log_debug("DDPGAgent", f"Added noise: std={self.noise_std}, noise={noise}")
         
-        log_debug("DDPGAgent", f"Final action: {action}")
+        log_debug("DDPGAgent", f"Final normalized action: {action}")
         return action
     
     def decay_noise(self):
@@ -634,6 +623,7 @@ class DDPGAgent:
                 'parent_id': self.parent_id,
                 'lineage_depth': self.lineage_depth,
                 'creation_timestamp': self.creation_timestamp,
+                'action_type': 'absolute'  # Mark as absolute angle controller
             }
             
             log_data("DDPGAgent", "Checkpoint keys", list(checkpoint.keys()))
@@ -652,13 +642,17 @@ class DDPGAgent:
         Returns:
             DDPGAgent instance
         """
-        log_section("DDPGAgent", "LOADING AGENT FROM CHECKPOINT")
+        log_section("DDPGAgent", "LOADING AGENT FROM CHECKPOINT (ABSOLUTE)")
         
         with LogFunction("DDPGAgent", "load", args=(filepath, agent_id)):
             log_info("DDPGAgent", f"Loading agent from: {filepath}")
             
             checkpoint = torch.load(filepath, map_location='cpu')
             log_data("DDPGAgent", "Checkpoint keys", list(checkpoint.keys()))
+            
+            # Check if this is an absolute angle controller
+            if checkpoint.get('action_type', '') != 'absolute':
+                log_warning("DDPGAgent", "Loaded checkpoint appears to be for delta angles, converting to absolute")
             
             agent = cls(
                 checkpoint['obs_dim'], 
@@ -680,7 +674,8 @@ class DDPGAgent:
                 'agent_id': agent.agent_id,
                 'parent_id': agent.parent_id,
                 'lineage_depth': agent.lineage_depth,
-                'noise_std': agent.noise_std
+                'noise_std': agent.noise_std,
+                'action_type': 'absolute'
             })
             
             return agent
@@ -691,10 +686,10 @@ class DDPGAgent:
 # ============================================================================
 
 class ArmTrainingEnvironment:
-    """Environment for training joint angle control"""
+    """Environment for training absolute joint angle control"""
     
     def __init__(self, robot):
-        log_section("ArmTrainingEnvironment", "INITIALIZING TRAINING ENVIRONMENT")
+        log_section("ArmTrainingEnvironment", "INITIALIZING ABSOLUTE ANGLE TRAINING ENVIRONMENT")
         
         with LogFunction("ArmTrainingEnvironment", "__init__"):
             
@@ -737,6 +732,8 @@ class ArmTrainingEnvironment:
             self.success_reward = reward_config["success_reward"]
             self.angle_error_weight = reward_config["angle_error_weight"]
             self.stability_bonus = reward_config.get("stability_bonus", 0.0)
+            self.overshoot_penalty = reward_config.get("overshoot_penalty", 0.0)
+            self.action_smoothness_weight = reward_config.get("action_smoothness_weight", 0.0)
             
             log_info("ArmTrainingEnvironment", f"Reward config: tolerance={self.angle_tolerance}, success_reward={self.success_reward}")
             
@@ -771,12 +768,16 @@ class ArmTrainingEnvironment:
             
             log_info("ArmTrainingEnvironment", f"Observation dimension: {len(self.control_joints)}")
             log_info("ArmTrainingEnvironment", f"Action dimension: {len(self.control_joints)}")
+            log_info("ArmTrainingEnvironment", "ACTIONS ARE ABSOLUTE JOINT ANGLES")
             
             # Track if push force has been applied
             self.push_force_applied = False
             self.push_step_counter = 0
             
-            log_success("ArmTrainingEnvironment", "Training environment initialized")
+            # Track previous action for smoothness
+            self.prev_action = None
+            
+            log_success("ArmTrainingEnvironment", "Absolute angle training environment initialized")
     
     def get_observation(self):
         """Get current observation: delta between current and goal angles."""
@@ -815,15 +816,13 @@ class ArmTrainingEnvironment:
             angle = self.push_force_config["angle"]
             
             # Calculate force vector based on angle
-            # Webots: x is forward, y is left, z is up
             fx = force * np.cos(angle)
             fy = force * np.sin(angle)
             fz = 0.0  # No vertical force
             
             # Apply force to head (relative to robot coordinate system)
-            # Using addForceWithOffset(force, offset, relative=True)
             force_vector = [fx, fy, fz]
-            offset = [0.0, 0.0, 0.1]  # Offset from center to head (adjust as needed)
+            offset = [0.0, 0.0, 0.1]  # Offset from center to head
             
             self.robot_node.addForceWithOffset(force_vector, offset, True)
             self.push_force_applied = True
@@ -843,20 +842,23 @@ class ArmTrainingEnvironment:
         return angles
     
     def apply_action(self, action):
-        """Apply action to motors with scaling."""
-        log_debug("ArmTrainingEnvironment", f"apply_action called: action={action}")
+        """Apply action (absolute joint angles) to motors."""
+        log_debug("ArmTrainingEnvironment", f"apply_action called: normalized action={action}")
         
-        # Scale actions from [-1, 1] to joint limits
+        # Scale actions from [-1, 1] to absolute joint limits
         for i, joint_name in enumerate(self.control_joints):
             if joint_name in self.motors:
                 # Action is in [-1, 1], scale to joint limits
                 low, high = self.joint_limits[joint_name]
                 
-                # Map from [-1, 1] to [low, high]
-                scaled_action = low + (action[i] + 1) * (high - low) / 2
+                # Map from [-1, 1] to [low, high] for absolute angle
+                absolute_angle = low + (action[i] + 1) * (high - low) / 2
                 
-                self.motors[joint_name].setPosition(scaled_action)
-                log_debug("ArmTrainingEnvironment", f"Joint {joint_name}: action={action[i]:.3f} -> position={scaled_action:.3f}")
+                # Clamp to joint limits (just in case)
+                absolute_angle = np.clip(absolute_angle, low, high)
+                
+                self.motors[joint_name].setPosition(absolute_angle)
+                log_debug("ArmTrainingEnvironment", f"Joint {joint_name}: normalized={action[i]:.3f} -> absolute={absolute_angle:.3f} rad")
     
     def step(self):
         """Step the simulation."""
@@ -922,20 +924,34 @@ class ArmTrainingEnvironment:
         
         self.apply_push_force()
         
+        # Reset previous action
+        self.prev_action = None
+        
         obs = self.get_observation()
         log_info("ArmTrainingEnvironment", "Environment reset complete")
         
         return obs
     
     def compute_reward(self, obs, action, next_obs, timestep):
-        """Simple reward function for joint angle control."""
+        """Reward function for absolute angle control."""
         log_debug("ArmTrainingEnvironment", f"compute_reward called: timestep={timestep}")
         
         # Calculate total joint angle error
         joint_error = np.sum(np.abs(next_obs))
         
-        # Reward is negative of error (smaller error = higher reward)
+        # Base reward is negative of error (smaller error = higher reward)
         reward = self.angle_error_weight * joint_error
+        
+        # Add smoothness penalty if we have previous action
+        smoothness_penalty = 0.0
+        if self.prev_action is not None and self.action_smoothness_weight != 0:
+            # Penalize large changes in action (absolute angles)
+            action_diff = np.sum(np.abs(action - self.prev_action))
+            smoothness_penalty = self.action_smoothness_weight * action_diff
+            reward += smoothness_penalty
+        
+        # Update previous action
+        self.prev_action = action.copy()
         
         # Check if all joints are within tolerance
         in_tolerance = all(abs(delta) < self.angle_tolerance for delta in next_obs)
@@ -943,6 +959,24 @@ class ArmTrainingEnvironment:
         # Large bonus for success
         if in_tolerance:
             reward += self.success_reward
+        
+        # Check for overshoot (swinging past target)
+        overshoot_penalty = 0.0
+        if self.overshoot_penalty != 0:
+            # Check if any joint has changed direction past the target
+            for i, joint_name in enumerate(self.control_joints):
+                if joint_name in self.sensors:
+                    current_angle = self.sensors[joint_name].getValue()
+                    goal_angle = self.goal_angles.get(joint_name, 0.0)
+                    
+                    # Get current action (absolute angle)
+                    action_abs = self._normalized_to_absolute(action[i], joint_name)
+                    
+                    # Check if action is on opposite side of goal compared to current position
+                    if (current_angle - goal_angle) * (action_abs - goal_angle) < 0:
+                        overshoot_penalty += self.overshoot_penalty
+        
+        reward += overshoot_penalty
         
         # Done if successful
         done = in_tolerance
@@ -952,9 +986,19 @@ class ArmTrainingEnvironment:
         if timestep >= max_steps:
             done = True
         
-        log_debug("ArmTrainingEnvironment", f"Reward: error={joint_error:.3f}, total={reward:.3f}, done={done}, in_tolerance={in_tolerance}")
+        log_debug("ArmTrainingEnvironment", 
+                 f"Reward: error={joint_error:.3f}, smoothness={smoothness_penalty:.3f}, "
+                 f"overshoot={overshoot_penalty:.3f}, total={reward:.3f}, "
+                 f"done={done}, in_tolerance={in_tolerance}")
         
         return reward, done
+    
+    def _normalized_to_absolute(self, normalized_action, joint_name):
+        """Convert normalized action [-1, 1] to absolute angle."""
+        if joint_name in self.joint_limits:
+            low, high = self.joint_limits[joint_name]
+            return low + (normalized_action + 1) * (high - low) / 2
+        return normalized_action
     
     def is_success(self, obs):
         """Check if current state is a success."""
@@ -968,8 +1012,8 @@ class ArmTrainingEnvironment:
 # ============================================================================
 
 def train_mode():
-    """Run DDPG training mode."""
-    log_section("DDPGController", "STARTING DDPG TRAINING MODE")
+    """Run DDPG training mode for absolute angle control."""
+    log_section("DDPGController", "STARTING DDPG TRAINING MODE (ABSOLUTE ANGLES)")
     
     with LogFunction("DDPGController", "train_mode"):
         
@@ -983,6 +1027,8 @@ def train_mode():
         global_episode = int(os.environ.get('RL_GLOBAL_EPISODE', '0'))
         
         log_info("DDPGController", f"Multi-agent mode: {is_multi_agent}")
+        log_info("DDPGController", "Training with ABSOLUTE joint angles as actions")
+        
         if is_multi_agent:
             log_data("DDPGController", "Multi-agent info", {
                 'agent_id': agent_id,
@@ -1076,7 +1122,6 @@ def train_mode():
             window_size = 50
             success_threshold = 0.0
             min_episodes = 0
-            local_episode_id = 0  # Track local episode within this run
         else:
             max_episodes = CONFIG["training"]["max_episodes"]
             save_every = CONFIG["checkpoints"]["save_every"]
@@ -1085,7 +1130,7 @@ def train_mode():
             success_threshold = CONFIG["early_stopping"]["success_threshold"]
             min_episodes = CONFIG["early_stopping"]["min_episodes"]
         
-        log_info("DDPGController", "Starting DDPG training...")
+        log_info("DDPGController", "Starting DDPG training for absolute angles...")
         log_info("DDPGController", f"Early stopping: {early_stopping}, window: {window_size}, threshold: {success_threshold}")
         
         for episode in range(1, max_episodes + 1):
@@ -1100,6 +1145,7 @@ def train_mode():
             step_rewards = []
             step_errors = []
             step_actions = []
+            step_absolute_angles = []
             
             while not done and steps < CONFIG["training"]["max_steps"]:
                 # Get action with exploration noise
@@ -1134,6 +1180,15 @@ def train_mode():
                 step_errors.append(float(step_error))
                 step_actions.append([float(a) for a in action])
                 
+                # Convert normalized actions to absolute angles for logging
+                absolute_angles = []
+                for i, joint_name in enumerate(CONFIG["control_joints"]):
+                    if joint_name in CONFIG["training"]["joint_limits"]:
+                        low, high = CONFIG["training"]["joint_limits"][joint_name]
+                        abs_angle = low + (action[i] + 1) * (high - low) / 2
+                        absolute_angles.append(float(abs_angle))
+                step_absolute_angles.append(absolute_angles)
+                
                 obs = next_obs
             
             # Decay exploration noise
@@ -1153,17 +1208,17 @@ def train_mode():
             
             # In multi-agent mode, save results after each episode
             if is_multi_agent and results_file:
-                local_episode_id = episode - 1
                 results = {
                     'agent_id': agent_id,
                     'stage_id': stage_id,
                     'global_episode_id': global_episode,
-                    'local_episode_id': local_episode_id,
+                    'local_episode_id': episode - 1,
                     'total_reward': float(total_reward),
                     'steps': steps,
                     'success': bool(success),
                     'termination_reason': 'normal' if not done else 'time_limit',
                     'average_error': float(avg_error),
+                    'action_type': 'absolute',
                     'start_idx': 0,  # Will be updated by stats logger
                     'end_idx': steps
                 }
@@ -1184,7 +1239,7 @@ def train_mode():
                     except Exception as e:
                         log_exception("DDPGController", e, f"Failed to save updated checkpoint")
 
-            # Save detailed episode stats (matches PPO) - only in single-agent mode
+            # Save detailed episode stats - only in single-agent mode
             if not is_multi_agent:
                 episode_stats = {
                     'episode': episode,
@@ -1200,6 +1255,8 @@ def train_mode():
                     'step_rewards': step_rewards,
                     'step_errors': step_errors,
                     'step_actions': step_actions,
+                    'step_absolute_angles': step_absolute_angles,
+                    'action_type': 'absolute'
                 }
                 save_detailed_stats(episode_stats, episode)
             
@@ -1236,7 +1293,7 @@ def train_mode():
                 agent.save(best_path)
                 log_success("DDPGController", f"New best model saved: {best_path} (reward: {best_reward:.2f})")
             
-            # Save checkpoint and generate plots periodically (matches PPO)
+            # Save checkpoint and generate plots periodically
             if episode % save_every == 0:
                 checkpoint_path_single = os.path.join(CHECKPOINT_DIR, f"ddpg_checkpoint_ep{episode}.pt")
                 agent.save(checkpoint_path_single)
@@ -1258,14 +1315,14 @@ def train_mode():
         agent.save(final_path)
         log_success("DDPGController", f"Final model saved to: {final_path}")
 
-        # Generate final plots (matches PPO)
+        # Generate final plots
         if not is_multi_agent:
             generate_training_plots(episode_rewards, episode_steps, 
                                 success_history, episode_errors, FINAL_PLOTS_DIR)
         
         total_time = time.time() - start_time
         
-        log_section("DDPGController", "TRAINING COMPLETE")
+        log_section("DDPGController", "TRAINING COMPLETE (ABSOLUTE ANGLES)")
         log_info("DDPGController", f"Total episodes: {len(episode_rewards)}")
         log_info("DDPGController", f"Total steps: {sum(episode_steps)}")
         log_info("DDPGController", f"Total time: {total_time/60:.1f} minutes")
@@ -1287,7 +1344,7 @@ def train_mode():
         
         robot.simulationSetMode(0) # Pause simulation at the end
         
-        log_success("DDPGController", "DDPG training completed successfully")
+        log_success("DDPGController", "DDPG training for absolute angles completed successfully")
 
 
 # ============================================================================
@@ -1295,8 +1352,8 @@ def train_mode():
 # ============================================================================
 
 def test_mode():
-    """Run test mode with a trained DDPG model."""
-    log_section("DDPGController", "STARTING DDPG TEST MODE")
+    """Run test mode with a trained DDPG model for absolute angle control."""
+    log_section("DDPGController", "STARTING DDPG TEST MODE (ABSOLUTE ANGLES)")
     
     with LogFunction("DDPGController", "test_mode"):
         
@@ -1317,7 +1374,7 @@ def test_mode():
         agent.actor.eval()
         agent.actor_target.eval()
         
-        log_info("DDPGController", "Starting test simulation...")
+        log_info("DDPGController", "Starting test simulation for absolute angle control...")
         log_info("DDPGController", "Press Ctrl+C in Webots to stop")
         
         episode_count = 0
@@ -1351,10 +1408,20 @@ def test_mode():
                     if steps % 20 == 0 or done:
                         current_angles = env.get_current_angles()
                         error = np.sum(np.abs(next_obs))
+                        
+                        # Convert normalized action to absolute angles
+                        absolute_actions = {}
+                        for i, joint_name in enumerate(CONFIG["control_joints"]):
+                            if joint_name in CONFIG["training"]["joint_limits"]:
+                                low, high = CONFIG["training"]["joint_limits"][joint_name]
+                                abs_angle = low + (action[i] + 1) * (high - low) / 2
+                                absolute_actions[joint_name] = abs_angle
+                        
                         log_info("DDPGController", 
                                 f"  Step {steps:3d}: Reward: {total_reward:7.2f} | "
                                 f"Error: {error:.3f} | "
-                                f"Angles: {current_angles}")
+                                f"Current: {current_angles} | "
+                                f"Action (abs): {absolute_actions}")
                     
                     obs = next_obs
                 
@@ -1385,12 +1452,12 @@ def test_mode():
 
 def main():
     """Main function - read mode from config.json."""
-    log_section("DDPGController", "STARTING DDPG CONTROLLER")
+    log_section("DDPGController", "STARTING DDPG ABSOLUTE ANGLE CONTROLLER")
     
     with LogFunction("DDPGController", "main"):
         mode = CONFIG["mode"]
         
-        log_info("DDPGController", f"DDPG Controller - Mode: {mode}")
+        log_info("DDPGController", f"DDPG Absolute Angle Controller - Mode: {mode}")
         
         if mode == "train":
             train_mode()

@@ -1,6 +1,6 @@
 {
   "mode": "train",
-  "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final.pt",
+  "model_path": "controllers/op3_ddpg_abs/checkpoints/ddpg_final.pt",
   
   "control_joints": [
     "ShoulderR", "ShoulderL", 
@@ -50,7 +50,7 @@
   "training": {
     "max_episodes": 10000,
     "max_steps": 30,
-    "timestep": 8,
+    "timestep": 32,
     
     "ddpg": {
       "actor_lr": 1e-4,
@@ -68,7 +68,9 @@
       "angle_tolerance": 0.025,
       "success_reward": 10.0,
       "angle_error_weight": -1.0,
-      "stability_bonus": 0.1
+      "stability_bonus": 0.1,
+      "overshoot_penalty": -0.5,
+      "action_smoothness_weight": -0.01
     },
     
     "joint_limits": {
@@ -96,9 +98,9 @@
     "save_every": 100,
     "save_best": true
   },
+  
   "visualization": {
     "save_plot": true,
     "save_every": 50
   }
 }
-

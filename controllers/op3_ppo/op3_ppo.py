@@ -66,7 +66,7 @@ def _create_default_config(mode_str):
             "training": {
                 "max_episodes": 2000,
                 "max_steps": 200,
-                "timestep": 32,
+                "timestep": 8,
                 "ppo": {
                     "learning_rate": 3e-4,
                     "gamma": 0.99,
@@ -122,7 +122,7 @@ def _create_default_config(mode_str):
             },
             "test": {
                 "max_steps": 30,
-                "timestep": 32,
+                "timestep": 8,
                 "render": True,
                 "sleep_time": 0.01
             },
