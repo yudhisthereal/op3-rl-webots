@@ -65,7 +65,7 @@
   
   "test": {
     "max_steps": 30,
-    "timestep": 32,
+    "timestep": 8,
     "render": true,
     "sleep_time": 0.01
   },

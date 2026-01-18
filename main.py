@@ -1974,8 +1974,8 @@ if __name__ == "__main__":
     # Example usage
     parser = argparse.ArgumentParser(description="Multi-Agent Training")
     parser.add_argument('--controller', type=str, required=True,
-                       choices=['controllers/op3_ddpg', 'controllers/op3_ppo'])
-    parser.add_argument('--alg', type=str, required=True, choices=['ddpg', 'ppo'])
+                       choices=['controllers/op3_ddpg', 'controllers/op3_ddpg_abs', 'controllers/op3_ppo'])
+    parser.add_argument('--alg', type=str, required=True, choices=['ddpg', 'ddpg_abs', 'ppo'])
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--episodes', type=int, default=10000)
     

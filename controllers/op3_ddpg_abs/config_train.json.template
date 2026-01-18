@@ -50,7 +50,7 @@
   "training": {
     "max_episodes": 10000,
     "max_steps": 30,
-    "timestep": 32,
+    "timestep": 8,
     
     "ddpg": {
       "actor_lr": 1e-4,
