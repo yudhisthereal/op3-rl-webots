@@ -31,6 +31,20 @@ STATS_DIR = os.path.join(CONTROLLER_DIR, "training_stats")
 PLOTS_DIR = os.path.join(STATS_DIR, "plots")
 FINAL_PLOTS_DIR = os.path.join(STATS_DIR, "final_plots")
 
+# Run directory paths (set by main.py)
+RUN_DIR = os.environ.get('RL_RUN_DIR', '')
+RUN_LABEL = os.environ.get('RL_RUN_LABEL', 'default')
+
+# Model paths based on run_label to avoid overwriting
+FINAL_MODEL_DIR = os.path.join(CONTROLLER_DIR, "runs")
+FINAL_MODEL_PATH = os.path.join(FINAL_MODEL_DIR, f"final_{RUN_LABEL}.pt")
+
+# Best model path (inside run directory)
+if RUN_DIR:
+    BEST_MODEL_PATH = os.path.join(RUN_DIR, f"best_{RUN_LABEL}.pt")
+else:
+    BEST_MODEL_PATH = os.path.join(CHECKPOINT_DIR, f"best_{RUN_LABEL}.pt")
+
 # Add project root to path
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -1286,12 +1300,11 @@ def train_mode():
                         f"Noise: {agent.noise_std:.3f} | "
                         f"Angles: {[f'{v:.2f}' for v in current_angles.values()]}")
             
-            # Save best model
+            # Save best model (inside run directory)
             if CONFIG["checkpoints"]["save_best"] and total_reward > best_reward:
                 best_reward = total_reward
-                best_path = os.path.join(CHECKPOINT_DIR, "ddpg_best.pt")
-                agent.save(best_path)
-                log_success("DDPGController", f"New best model saved: {best_path} (reward: {best_reward:.2f})")
+                agent.save(BEST_MODEL_PATH)
+                log_success("DDPGController", f"New best model saved: {BEST_MODEL_PATH} (reward: {best_reward:.2f})")
             
             # Save checkpoint and generate plots periodically
             if episode % save_every == 0:
@@ -1310,10 +1323,10 @@ def train_mode():
                     log_success("DDPGController", f"Early stopping at episode {episode} with {success_rate:.1%} success rate!")
                     break
         
-        # Save final model
-        final_path = os.path.join(CHECKPOINT_DIR, "ddpg_final.pt")
-        agent.save(final_path)
-        log_success("DDPGController", f"Final model saved to: {final_path}")
+        # Save final model (inside runs directory, not overwritten by different run_label)
+        os.makedirs(FINAL_MODEL_DIR, exist_ok=True)
+        agent.save(FINAL_MODEL_PATH)
+        log_success("DDPGController", f"Final model saved to: {FINAL_MODEL_PATH}")
 
         # Generate final plots
         if not is_multi_agent:
@@ -1329,7 +1342,8 @@ def train_mode():
         log_info("DDPGController", f"Average reward: {np.mean(episode_rewards):.3f}")
         log_info("DDPGController", f"Best reward: {best_reward:.3f}")
         log_info("DDPGController", f"Final success rate: {success_history[-1] if success_history else 0.0:.1%}")
-        log_info("DDPGController", f"Final model saved to: {final_path}")
+        log_info("DDPGController", f"Final model saved to: {FINAL_MODEL_PATH}")
+        log_info("DDPGController", f"Best model saved to: {BEST_MODEL_PATH}")
         log_info("DDPGController", f"Stats saved to: {STATS_DIR}")
         
         # In multi-agent mode, exit immediately after saving results

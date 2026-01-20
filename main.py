@@ -189,6 +189,7 @@ def run_single_agent_training(controller: str, seed: Optional[int] = None) -> Di
         env['RL_TRAIN'] = 'true'
         env['RL_CONTROLLER'] = controller
         env['RL_RUN_DIR'] = run_dir
+        env['RL_RUN_LABEL'] = run_label  # Pass the run label for model naming
         if seed is not None:
             env['RL_SEED'] = str(seed)
         

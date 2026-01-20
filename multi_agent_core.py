@@ -698,23 +698,34 @@ class AgentCheckpointManager:
         └── stage_<N>/
             └── agent_<ID>/
                 └── model.pt
+    
+    Best model for stage (for controller compatibility):
+    <run_dir>/
+    └── stage_<N>/
+        └── best_stage_<N>_<label>.pt
     """
     
-    def __init__(self, run_dir: str):
+    def __init__(self, run_dir: str, run_label: str = "default"):
         """
         Initialize checkpoint manager.
         
         Args:
             run_dir: Base run directory
+            run_label: Label for model naming (from config_train.json)
         """
         log_section("AgentCheckpointManager", "INITIALIZING CHECKPOINT MANAGER")
         
-        with LogFunction("AgentCheckpointManager", "__init__", args=(run_dir,)):
+        with LogFunction("AgentCheckpointManager", "__init__", args=(run_dir, run_label)):
             self.run_dir = run_dir
+            self.run_label = run_label
             self.checkpoints_dir = os.path.join(run_dir, "checkpoints")
             os.makedirs(self.checkpoints_dir, exist_ok=True)
             
+            # Stage best model directory
+            os.makedirs(run_dir, exist_ok=True)
+            
             log_info("AgentCheckpointManager", f"Checkpoints directory: {self.checkpoints_dir}")
+            log_info("AgentCheckpointManager", f"Run label: {run_label}")
             log_success("AgentCheckpointManager", "Initialized successfully")
     
     def get_stage_dir(self, stage_id: int) -> str:
@@ -793,6 +804,26 @@ class AgentCheckpointManager:
                 torch.save(checkpoint, filepath)
                 log_success("AgentCheckpointManager", f"Checkpoint saved: {filepath}")
                 log_data("AgentCheckpointManager", "Checkpoint size", os.path.getsize(filepath))
+                
+                # Also save stage best model with proper naming for controller compatibility
+                # Structure: <run_dir>/stage_<N>/best_stage_<N>_<label>.pt
+                if is_best and agent.model_state:
+                    stage_dir = os.path.join(self.run_dir, f"stage_{stage_id}")
+                    os.makedirs(stage_dir, exist_ok=True)
+                    stage_best_path = os.path.join(stage_dir, f"best_stage_{stage_id}_{self.run_label}.pt")
+                    
+                    # Create controller-compatible checkpoint (using model_state directly)
+                    controller_checkpoint = agent.model_state.copy()
+                    controller_checkpoint['agent_id'] = agent.agent_id
+                    controller_checkpoint['parent_id'] = agent.parent_id
+                    controller_checkpoint['lineage_depth'] = agent.lineage_depth
+                    controller_checkpoint['creation_timestamp'] = agent.creation_timestamp
+                    controller_checkpoint['stage_id'] = stage_id
+                    controller_checkpoint['fitness'] = agent.fitness
+                    
+                    torch.save(controller_checkpoint, stage_best_path)
+                    log_info("AgentCheckpointManager", f"Stage best model saved: {stage_best_path}")
+                
                 return filepath
             except Exception as e:
                 log_exception("AgentCheckpointManager", e, f"Failed to save checkpoint: {filepath}")

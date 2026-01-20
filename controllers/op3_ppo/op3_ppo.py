@@ -25,6 +25,20 @@ CHECKPOINT_DIR = os.path.join(CONTROLLER_DIR, "checkpoints")
 STATS_DIR = os.path.join(CONTROLLER_DIR, "training_stats")
 PROJECT_ROOT = os.path.abspath(os.path.join(CONTROLLER_DIR, '..', '..'))
 
+# Run directory paths (set by main.py)
+RUN_DIR = os.environ.get('RL_RUN_DIR', '')
+RUN_LABEL = os.environ.get('RL_RUN_LABEL', 'default')
+
+# Model paths based on run_label to avoid overwriting
+FINAL_MODEL_DIR = os.path.join(CONTROLLER_DIR, "runs")
+FINAL_MODEL_PATH = os.path.join(FINAL_MODEL_DIR, f"final_{RUN_LABEL}.pt")
+
+# Best model path (inside run directory)
+if RUN_DIR:
+    BEST_MODEL_PATH = os.path.join(RUN_DIR, f"best_{RUN_LABEL}.pt")
+else:
+    BEST_MODEL_PATH = os.path.join(CHECKPOINT_DIR, f"best_{RUN_LABEL}.pt")
+
 # Add project root to path
 sys.path.insert(0, PROJECT_ROOT)
 
@@ -977,11 +991,11 @@ def train_mode(config):
                   f"Time: {elapsed/60:5.1f} min"
                   f"Angles: {[f'{v:.2f}' for v in current_angles.values()]}")
         
-        # Save best model
+        # Save best model (inside run directory)
         if config["checkpoints"]["save_best"] and total_reward > best_reward:
             best_reward = total_reward
-            best_path = os.path.join(CHECKPOINT_DIR, "ppo_best.pt")
-            agent.save(best_path)
+            agent.save(BEST_MODEL_PATH)
+            print(f"✅ New best model saved: {BEST_MODEL_PATH} (reward: {best_reward:.2f})")
         
         # Save checkpoint and generate plots periodically
         if episode % save_every == 0:
@@ -1001,9 +1015,10 @@ def train_mode(config):
                 print(f"\n🎉 Early stopping at episode {episode} with {success_rate:.1%} success rate!")
                 break
     
-    # Save final model
-    final_path = os.path.join(CHECKPOINT_DIR, "ppo_final.pt")
-    agent.save(final_path)
+    # Save final model (inside runs directory, not overwritten by different run_label)
+    os.makedirs(FINAL_MODEL_DIR, exist_ok=True)
+    agent.save(FINAL_MODEL_PATH)
+    print(f"✅ Final model saved to: {FINAL_MODEL_PATH}")
     
     # Generate final plots
     plot_dir = os.path.join(STATS_DIR, "final_plots")
@@ -1022,7 +1037,8 @@ def train_mode(config):
     print(f"Average reward: {np.mean(episode_rewards):.3f}")
     print(f"Best reward: {best_reward:.3f}")
     print(f"Final success rate: {final_success_rate:.1%}")
-    print(f"Final model saved to: {final_path}")
+    print(f"Final model saved to: {FINAL_MODEL_PATH}")
+    print(f"Best model saved to: {BEST_MODEL_PATH}")
     print(f"Stats saved to: {STATS_DIR}")
     print("="*70)
     
