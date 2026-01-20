@@ -105,5 +105,9 @@ controllers/**/*config*.json
 controllers/angle_monitor/angle_presets.json
 controllers/angle_monitor/angle_state.json
 
+# AI
 *TODO*.md
 */**/*TODO*.md
+
+# Webots
+*.wbproj
