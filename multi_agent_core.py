@@ -36,6 +36,7 @@ from logging_utils import (
 )
 
 from stats_manager import HDF5StatsLogger, StageInfo, EpisodeInfo, AgentInfo
+from stats_manager import safe_torch_save, safe_torch_load
 from evolutionary_operators import (
     SelectionOperator,
     MutationOperator,
@@ -803,7 +804,9 @@ class AgentCheckpointManager:
             try:
                 torch.save(checkpoint, filepath)
                 log_success("AgentCheckpointManager", f"Checkpoint saved: {filepath}")
-                log_data("AgentCheckpointManager", "Checkpoint size", os.path.getsize(filepath))
+            except Exception as e:
+                log_exception("AgentCheckpointManager", e, f"Failed to save checkpoint: {filepath}")
+                raise
                 
                 # Also save stage best model with proper naming for controller compatibility
                 # Structure: <run_dir>/stage_<N>/best_stage_<N>_<label>.pt

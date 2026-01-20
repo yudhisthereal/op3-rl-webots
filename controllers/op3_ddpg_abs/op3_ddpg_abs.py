@@ -58,7 +58,8 @@ from logging_utils import (
 # Import stats manager for proper HDF5 logging
 from stats_manager import (
     HDF5StatsLogger, create_stats_logger,
-    StageInfo, EpisodeInfo, AgentInfo
+    StageInfo, EpisodeInfo, AgentInfo,
+    safe_torch_save, safe_torch_load
 )
 
 
@@ -588,7 +589,7 @@ class DDPGAgent:
         return critic_loss.item(), actor_loss.item()
     
     def save(self, filepath, agent_id=None):
-        """Save the agent's networks to a file.
+        """Save the agent's networks to a file with multi-process safety.
         
         Args:
             filepath: Path to save checkpoint
@@ -615,12 +616,18 @@ class DDPGAgent:
             
             log_data("DDPGAgent", "Checkpoint keys", list(checkpoint.keys()))
             
-            torch.save(checkpoint, filepath)
-            log_success("DDPGAgent", f"DDPG model saved to {filepath} (agent_id: {checkpoint['agent_id']})")
+            # Use safe save with file locking
+            success = safe_torch_save(checkpoint, filepath)
+            
+            if success:
+                log_success("DDPGAgent", f"DDPG model saved to {filepath} (agent_id: {checkpoint['agent_id']})")
+            else:
+                log_error("DDPGAgent", f"Failed to save checkpoint to {filepath}")
+                raise IOError(f"Failed to save checkpoint: {filepath}")
     
     @classmethod
     def load(cls, filepath, agent_id=None):
-        """Load an agent from a saved checkpoint.
+        """Load an agent from a saved checkpoint with multi-process safety.
         
         Args:
             filepath: Path to checkpoint file
@@ -634,7 +641,13 @@ class DDPGAgent:
         with LogFunction("DDPGAgent", "load", args=(filepath, agent_id)):
             log_info("DDPGAgent", f"Loading agent from: {filepath}")
             
-            checkpoint = torch.load(filepath, map_location='cpu')
+            # Use safe load with file locking and retries
+            try:
+                checkpoint = safe_torch_load(filepath, map_location='cpu')
+            except Exception as e:
+                log_exception("DDPGAgent", e, f"Failed to load checkpoint: {filepath}")
+                raise
+            
             log_data("DDPGAgent", "Checkpoint keys", list(checkpoint.keys()))
             
             # Check if this is an absolute angle controller

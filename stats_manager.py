@@ -3,16 +3,26 @@ Multi-Stage Statistics Manager with HDF5 Support.
 
 Provides comprehensive logging for multi-agent, multi-stage evolutionary training
 using PyTables for efficient HDF5 storage.
+
+Multi-Process Safe with proper file locking and retry logic.
 """
 
 import os
+import sys
 import json
+import time
+import fcntl
 import numpy as np
 import tables
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Callable
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from contextlib import contextmanager
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import logging
 from logging_utils import (
@@ -20,6 +30,368 @@ from logging_utils import (
     log_debug, log_data, log_exception, log_section,
     start_timer, stop_timer, LogFunction
 )
+
+
+# =============================================================================
+# MULTI-PROCESS FILE LOCKING UTILITIES
+# =============================================================================
+
+class FileLock:
+    """
+    Multi-process file lock using fcntl.flock.
+    
+    Provides safe concurrent access to files across multiple processes.
+    Supports retry logic with exponential backoff.
+    """
+    
+    def __init__(
+        self,
+        filepath: str,
+        timeout: float = 30.0,
+        max_retries: int = 10,
+        retry_delay_base: float = 0.1,
+        retry_delay_max: float = 2.0
+    ):
+        """
+        Initialize file lock.
+        
+        Args:
+            filepath: Path to file to lock
+            timeout: Maximum time to wait for lock (seconds)
+            max_retries: Maximum number of retry attempts
+            retry_delay_base: Base delay for exponential backoff (seconds)
+            retry_delay_max: Maximum delay between retries (seconds)
+        """
+        self.filepath = filepath
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_delay_base = retry_delay_base
+        self.retry_delay_max = retry_delay_max
+        
+        # Internal file handle for locking
+        self._lock_file = None
+        self._locked = False
+        
+        log_debug("FileLock", f"Initialized for: {filepath}")
+    
+    def _get_lock_file_path(self) -> str:
+        """Get path to lock file (adds .lock suffix)."""
+        return f"{self.filepath}.lock"
+    
+    def acquire(self, blocking: bool = True) -> bool:
+        """
+        Acquire the file lock.
+        
+        Args:
+            blocking: If True, wait until lock is acquired. If False, return immediately.
+            
+        Returns:
+            True if lock acquired, False if not (non-blocking mode only)
+        """
+        lock_path = self._get_lock_file_path()
+        
+        try:
+            # Create lock directory if needed
+            os.makedirs(os.path.dirname(lock_path) if os.path.dirname(lock_path) else '.', exist_ok=True)
+            
+            # Open lock file (create if doesn't exist)
+            self._lock_file = open(lock_path, 'a')
+            
+            # Calculate retry parameters
+            start_time = time.time()
+            attempt = 0
+            
+            while True:
+                try:
+                    # Try to acquire exclusive lock (non-blocking by default)
+                    fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self._locked = True
+                    log_debug("FileLock", f"Acquired lock for: {self.filepath}")
+                    return True
+                    
+                except (IOError, OSError) as e:
+                    if e.errno in (11, 35):  # EWOULDBLOCK / EAGAIN
+                        if not blocking:
+                            log_debug("FileLock", f"Could not acquire lock (non-blocking): {self.filepath}")
+                            return False
+                        
+                        # Check timeout
+                        elapsed = time.time() - start_time
+                        if elapsed >= self.timeout:
+                            log_error("FileLock", f"Timeout waiting for lock: {self.filepath}")
+                            raise TimeoutError(f"Could not acquire lock within {self.timeout}s: {self.filepath}")
+                        
+                        # Calculate delay with exponential backoff
+                        attempt += 1
+                        if attempt > self.max_retries:
+                            attempt = self.max_retries
+                        
+                        delay = min(self.retry_delay_base * (2 ** (attempt - 1)), self.retry_delay_max)
+                        delay = min(delay, self.timeout - elapsed)  # Don't exceed timeout
+                        
+                        log_debug("FileLock", f"Lock busy, waiting {delay:.3f}s (attempt {attempt}/{self.max_retries}): {self.filepath}")
+                        time.sleep(delay)
+                        
+                    else:
+                        raise
+                        
+        except Exception as e:
+            log_exception("FileLock", e, f"Error acquiring lock: {self.filepath}")
+            self._cleanup()
+            raise
+    
+    def release(self) -> bool:
+        """Release the file lock."""
+        try:
+            if self._locked and self._lock_file:
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                log_debug("FileLock", f"Released lock for: {self.filepath}")
+                self._locked = False
+                
+            self._cleanup()
+            return True
+            
+        except Exception as e:
+            log_exception("FileLock", e, f"Error releasing lock: {self.filepath}")
+            self._cleanup()
+            return False
+    
+    def _cleanup(self):
+        """Clean up lock file handle."""
+        if self._lock_file:
+            try:
+                self._lock_file.close()
+            except Exception:
+                pass
+            self._lock_file = None
+        self._locked = False
+    
+    def __enter__(self):
+        """Context manager entry."""
+        self.acquire()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.release()
+        return False
+    
+    def __del__(self):
+        """Destructor."""
+        self.release()
+
+
+def with_file_lock(
+    filepath: str,
+    timeout: float = 30.0,
+    max_retries: int = 10
+) -> Callable:
+    """
+    Decorator to add file locking to a function.
+    
+    Args:
+        filepath: Path to file to lock
+        timeout: Maximum time to wait for lock (seconds)
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        Decorated function
+    """
+    def decorator(func: Callable) -> Callable:
+        def wrapper(*args, **kwargs):
+            lock = FileLock(filepath, timeout=timeout, max_retries=max_retries)
+            with lock:
+                return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+@contextmanager
+def safe_file_operation(
+    filepath: str,
+    timeout: float = 30.0,
+    max_retries: int = 10
+):
+    """
+    Context manager for safe file operations with locking.
+    
+    Args:
+        filepath: Path to file to lock
+        timeout: Maximum time to wait for lock (seconds)
+        max_retries: Maximum number of retry attempts
+    """
+    lock = FileLock(filepath, timeout=timeout, max_retries=max_retries)
+    lock.acquire()
+    try:
+        yield lock
+    finally:
+        lock.release()
+
+
+# =============================================================================
+# ATOMIC FILE SAVE UTILITIES
+# =============================================================================
+
+def atomic_save(
+    data: Any,
+    filepath: str,
+    save_func: Callable = None,
+    timeout: float = 30.0,
+    max_retries: int = 10
+) -> bool:
+    """
+    Atomically save data to a file.
+    
+    Writes to a temporary file first, then renames to the target file.
+    This ensures atomicity - either the entire write succeeds or it doesn't.
+    
+    Args:
+        data: Data to save
+        filepath: Target file path
+        save_func: Function to save data (e.g., torch.save, pickle.dump)
+        timeout: Maximum time to wait for lock (seconds)
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        True if save succeeded, False otherwise
+    """
+    with LogFunction("FileUtils", "atomic_save", args=(filepath,)):
+        
+        log_info("FileUtils", f"Atomically saving to: {filepath}")
+        
+        # Create temp file in same directory (for atomic rename)
+        temp_path = f"{filepath}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+        
+        lock = FileLock(filepath, timeout=timeout, max_retries=max_retries)
+        
+        try:
+            # Acquire lock
+            lock.acquire()
+            
+            try:
+                # Save to temp file
+                if save_func:
+                    save_func(data, temp_path)
+                else:
+                    # Default to torch.save if available
+                    import torch
+                    torch.save(data, temp_path)
+                
+                # Atomic rename
+                os.rename(temp_path, filepath)
+                
+                log_success("FileUtils", f"Atomically saved: {filepath}")
+                return True
+                
+            except Exception as e:
+                log_exception("FileUtils", e, f"Error during save to {filepath}")
+                
+                # Clean up temp file if it exists
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+                
+                return False
+                
+        except Exception as e:
+            log_exception("FileUtils", e, f"Could not acquire lock for {filepath}")
+            return False
+            
+        finally:
+            lock.release()
+
+
+def safe_torch_save(
+    model: Any,
+    filepath: str,
+    timeout: float = 30.0,
+    max_retries: int = 10
+) -> bool:
+    """
+    Safely save PyTorch model with file locking.
+    
+    Args:
+        model: PyTorch model or checkpoint dict
+        filepath: Target file path
+        timeout: Maximum time to wait for lock (seconds)
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        True if save succeeded, False otherwise
+    """
+    return atomic_save(
+        data=model,
+        filepath=filepath,
+        save_func=lambda m, p: __import__('torch').save(m, p),
+        timeout=timeout,
+        max_retries=max_retries
+    )
+
+
+def safe_torch_load(
+    filepath: str,
+    map_location: Any = None,
+    timeout: float = 30.0,
+    max_retries: int = 10
+) -> Any:
+    """
+    Safely load PyTorch model with file locking and retries.
+    
+    Args:
+        filepath: Path to checkpoint file
+        map_location: Optional device mapping
+        timeout: Maximum time to wait for lock (seconds)
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        Loaded model/checkpoint
+    """
+    with LogFunction("FileUtils", "safe_torch_load", args=(filepath,)):
+        
+        log_info("FileUtils", f"Loading checkpoint: {filepath}")
+        
+        lock = FileLock(filepath, timeout=timeout, max_retries=max_retries)
+        
+        # Try to acquire lock (non-blocking first, then with retries)
+        if not lock.acquire(blocking=False):
+            # Lock busy, wait with retries
+            log_warning("FileUtils", f"File locked, waiting to load: {filepath}")
+            lock.acquire(blocking=True)
+        
+        try:
+            import torch
+            
+            # Try to load with retries
+            last_error = None
+            for attempt in range(max_retries + 1):
+                try:
+                    if map_location:
+                        checkpoint = torch.load(filepath, map_location=map_location)
+                    else:
+                        checkpoint = torch.load(filepath)
+                    
+                    log_success("FileUtils", f"Loaded checkpoint: {filepath}")
+                    return checkpoint
+                    
+                except (EOFError, IOError) as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        delay = 0.1 * (2 ** attempt)
+                        log_warning("FileUtils", f"Load failed (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.2f}s: {filepath}")
+                        time.sleep(delay)
+                    else:
+                        raise
+            
+            raise last_error
+            
+        except Exception as e:
+            log_exception("FileUtils", e, f"Error loading checkpoint: {filepath}")
+            raise
+            
+        finally:
+            lock.release()
 
 
 # HDF5 Description Definitions
