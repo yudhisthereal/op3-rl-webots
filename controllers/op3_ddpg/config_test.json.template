@@ -1,5 +1,7 @@
 {
   "mode": "test",
+  "run_label": "default",
+  
   "model_path": "controllers/op3_ddpg/checkpoints/ddpg_final.pt",
   
   "test_models": [

@@ -1,5 +1,7 @@
 {
   "mode": "train",
+  "run_label": "default",
+  
   "model_path": "controllers/op3_ddpg_abs/checkpoints/ddpg_final.pt",
   
   "control_joints": [
