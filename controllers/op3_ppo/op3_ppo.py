@@ -42,6 +42,12 @@ else:
 # Add project root to path
 sys.path.insert(0, PROJECT_ROOT)
 
+# Import stats manager for proper HDF5 logging
+from stats_manager import (
+    HDF5StatsLogger, create_stats_logger,
+    StageInfo, EpisodeInfo, AgentInfo
+)
+
 
 # ============================================================================
 # CONFIGURATION LOADING
@@ -740,30 +746,7 @@ class ArmTrainingEnvironment:
         """Check if current state is a success."""
         return all(abs(delta) < self.angle_tolerance for delta in obs)
 
-def save_detailed_stats(episode_stats, episode_num, config):
-    """Save detailed training statistics."""
-    os.makedirs(STATS_DIR, exist_ok=True)
-    
-    stats_file = os.path.join(STATS_DIR, f"episode_{episode_num:04d}_stats.json")
-    
-    with open(stats_file, 'w') as f:
-        json.dump(episode_stats, f, indent=2)
-    
-    # Also save to a cumulative file
-    cumulative_file = os.path.join(STATS_DIR, "all_episodes_summary.csv")
-    
-    if episode_num == 1:
-        with open(cumulative_file, 'w') as f:
-            f.write("episode,total_reward,steps,success,average_error,max_error,min_error\n")
-    
-    with open(cumulative_file, 'a') as f:
-        f.write(f"{episode_num},"
-                f"{episode_stats['total_reward']:.4f},"
-                f"{episode_stats['steps']},"
-                f"{int(episode_stats['success'])},"
-                f"{episode_stats['average_error']:.4f},"
-                f"{episode_stats['max_error']:.4f},"
-                f"{episode_stats['min_error']:.4f}\n")
+
 
 
 def generate_training_plots(episode_rewards, episode_steps, success_history, 
@@ -885,9 +868,33 @@ def train_mode(config):
     success_threshold = config["early_stopping"]["success_threshold"]
     min_episodes = config["early_stopping"]["min_episodes"]
     
+    # Initialize HDF5 stats logger
+    stats_logger = create_stats_logger(CONTROLLER_DIR, "ppo")
+
+    # Log stage information
+    stage_info = StageInfo(
+        stage_id=0,
+        stage_name="ppo_training_stage_0",
+        start_episode_global=0,
+        hyperparameters=config["training"]["ppo"],
+        metrics={}
+    )
+    stats_logger.log_stage(stage_info)
+
+    # Log agent information
+    agent_info = AgentInfo(
+        agent_id=agent.agent_id,
+        stage_id=0,
+        agent_type="ppo",
+        parameters_hash="",  # Could compute hash of config
+        parent_id=agent.parent_id,
+        lineage_depth=agent.lineage_depth
+    )
+    stats_logger.log_agent(agent_info)
+
     print("\n🏁 Starting PPO training...")
     print("-"*70)
-    
+
     for episode in range(1, max_episodes + 1):
         obs = env.reset()
         total_reward = 0.0
@@ -934,16 +941,52 @@ def train_mode(config):
         
         # Update agent
         agent.update()
-        
+
         # Check if episode was successful
         success = 1 if env.is_success(obs) else 0
         episode_successes.append(success)
         avg_error = np.mean(step_errors) if step_errors else 0.0
-        
+
         # Update statistics
         episode_rewards.append(total_reward)
         episode_steps.append(steps)
         episode_errors.append(avg_error)
+
+        # Log episode to HDF5
+        episode_info = EpisodeInfo(
+            global_episode_id=episode - 1,
+            stage_id=0,
+            local_episode_id=episode - 1,
+            total_steps=steps,
+            total_reward=float(total_reward),
+            success=bool(success),
+            termination_reason='normal' if not done else 'time_limit',
+            agent_id=agent.agent_id,
+            start_idx=0,  # Will be updated by log_timesteps
+            end_idx=steps
+        )
+        global_ep_id = stats_logger.log_episode(episode_info)
+
+        # Log timesteps to HDF5
+        if step_rewards and step_actions:
+            dones = [False] * len(step_rewards)
+            if step_rewards:
+                dones[-1] = True
+
+            start_idx, end_idx = stats_logger.log_timesteps(
+                global_episode_id=global_ep_id,
+                stage_id=0,
+                local_episode_id=episode - 1,
+                rewards=step_rewards,
+                actions=step_actions,
+                agent_id=agent.agent_id,
+                dones=dones
+            )
+
+            # Update episode with correct indices
+            episode_info.start_idx = start_idx
+            episode_info.end_idx = end_idx
+            stats_logger.log_episode(episode_info)  # Re-log with correct indices
         
         # Calculate success rate
         if episode >= window_size:
@@ -1027,7 +1070,24 @@ def train_mode(config):
     
     total_time = time.time() - start_time
     final_success_rate = success_history[-1] if success_history else 0.0
-    
+
+    # Log final stage metrics
+    if episode_rewards:
+        stats_logger.log_stage_summary(
+            stage_id=0,
+            mean_reward=float(np.mean(episode_rewards)),
+            success_rate=final_success_rate,
+            mean_episode_length=float(np.mean(episode_steps)),
+            window_size=window_size
+        )
+
+    # Update stage status to completed
+    stats_logger.update_stage(
+        stage_id=0,
+        end_episode_global=len(episode_rewards) - 1,
+        status="completed"
+    )
+
     print("\n" + "="*70)
     print("✅ PPO TRAINING COMPLETE")
     print("="*70)

@@ -121,37 +121,40 @@ class MultiStagePlotter:
     ) -> plt.Figure:
         """
         Plot episode rewards colored by stage.
-        
+
         Args:
             save_path: Optional path to save figure
             show_moving_avg: Whether to show moving average
             window_size: Window size for moving average
-            
+
         Returns:
             Matplotlib figure
         """
-        if 'episodes' not in self.data:
+        if 'episodes' not in self.data or len(self.data['episodes']) == 0:
             print("No episode data found")
             return None
-        
+
         fig, ax = plt.subplots(figsize=(12, 6))
-        
+
         episodes_df = self.data['episodes']
-        
+        has_data = False
+
         # Plot each stage with different color
         for stage in self.stages:
             stage_id = stage['stage_id']
             start_ep = stage['start_episode']
             end_ep = stage['end_episode'] or episodes_df['global_episode_id'].max()
-            
+
             # Filter episodes for this stage
             mask = (episodes_df['global_episode_id'] >= start_ep) & \
                    (episodes_df['global_episode_id'] <= end_ep)
             stage_episodes = episodes_df[mask]
-            
+
             if len(stage_episodes) == 0:
                 continue
-            
+
+            has_data = True
+
             # Plot raw rewards
             ax.scatter(
                 stage_episodes['global_episode_id'],
@@ -161,31 +164,35 @@ class MultiStagePlotter:
                 s=20,
                 label=f"Stage {stage_id}: {stage['stage_name']}"
             )
-            
+
             # Plot moving average
             if show_moving_avg and len(stage_episodes) > window_size:
                 rewards = stage_episodes['total_reward'].values
                 ma = np.convolve(rewards, np.ones(window_size)/window_size, mode='valid')
                 ma_x = stage_episodes['global_episode_id'].values[window_size-1:]
-                
+
                 ax.plot(
                     ma_x, ma,
                     color=self._get_stage_color(stage_id),
                     linewidth=2,
                     linestyle='-'
                 )
-        
-        ax.set_xlabel('Global Episode')
-        ax.set_ylabel('Total Reward')
-        ax.set_title('Episode Rewards by Stage')
-        ax.legend(loc='lower right')
-        ax.grid(True, alpha=0.3)
-        
+
+        if not has_data:
+            ax.text(0.5, 0.5, 'No training data available', ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Episode Rewards by Stage (No Data)')
+        else:
+            ax.set_xlabel('Global Episode')
+            ax.set_ylabel('Total Reward')
+            ax.set_title('Episode Rewards by Stage')
+            ax.legend(loc='lower right')
+            ax.grid(True, alpha=0.3)
+
         plt.tight_layout()
-        
+
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        
+
         return fig
     
     def plot_success_rates_by_stage(
@@ -195,39 +202,42 @@ class MultiStagePlotter:
     ) -> plt.Figure:
         """
         Plot success rates by stage.
-        
+
         Args:
             save_path: Optional path to save figure
             window_size: Window size for rolling average
-            
+
         Returns:
             Matplotlib figure
         """
-        if 'episodes' not in self.data:
+        if 'episodes' not in self.data or len(self.data['episodes']) == 0:
             print("No episode data found")
             return None
-        
+
         fig, ax = plt.subplots(figsize=(12, 6))
-        
+
         episodes_df = self.data['episodes']
-        
+        has_data = False
+
         # Calculate cumulative success rate
         episodes_df = episodes_df.copy()
         episodes_df['cumulative_success'] = episodes_df['success'].expanding().mean()
-        
+
         # Plot each stage
         for stage in self.stages:
             stage_id = stage['stage_id']
             start_ep = stage['start_episode']
             end_ep = stage['end_episode'] or episodes_df['global_episode_id'].max()
-            
+
             mask = (episodes_df['global_episode_id'] >= start_ep) & \
                    (episodes_df['global_episode_id'] <= end_ep)
             stage_episodes = episodes_df[mask]
-            
+
             if len(stage_episodes) == 0:
                 continue
-            
+
+            has_data = True
+
             ax.plot(
                 stage_episodes['global_episode_id'],
                 stage_episodes['cumulative_success'],
@@ -235,19 +245,23 @@ class MultiStagePlotter:
                 linewidth=2,
                 label=f"Stage {stage_id}: {stage['stage_name']}"
             )
-        
-        ax.set_xlabel('Global Episode')
-        ax.set_ylabel('Cumulative Success Rate')
-        ax.set_title('Success Rate by Stage')
-        ax.legend(loc='lower right')
-        ax.set_ylim([0, 1.05])
-        ax.grid(True, alpha=0.3)
-        
+
+        if not has_data:
+            ax.text(0.5, 0.5, 'No training data available', ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Success Rate by Stage (No Data)')
+        else:
+            ax.set_xlabel('Global Episode')
+            ax.set_ylabel('Cumulative Success Rate')
+            ax.set_title('Success Rate by Stage')
+            ax.legend(loc='lower right')
+            ax.set_ylim([0, 1.05])
+            ax.grid(True, alpha=0.3)
+
         plt.tight_layout()
-        
+
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        
+
         return fig
     
     def plot_episode_lengths_by_stage(
@@ -256,63 +270,67 @@ class MultiStagePlotter:
     ) -> plt.Figure:
         """
         Plot episode lengths by stage.
-        
+
         Args:
             save_path: Optional path to save figure
-            
+
         Returns:
             Matplotlib figure
         """
-        if 'episodes' not in self.data:
+        if 'episodes' not in self.data or len(self.data['episodes']) == 0:
             print("No episode data found")
             return None
-        
+
         fig, ax = plt.subplots(figsize=(12, 6))
-        
+
         episodes_df = self.data['episodes']
-        
+
         # Calculate mean episode length per stage
         stage_lengths = []
         stage_names = []
-        
+
         for stage in self.stages:
             stage_id = stage['stage_id']
             start_ep = stage['start_episode']
             end_ep = stage['end_episode'] or episodes_df['global_episode_id'].max()
-            
+
             mask = (episodes_df['global_episode_id'] >= start_ep) & \
                    (episodes_df['global_episode_id'] <= end_ep)
             stage_episodes = episodes_df[mask]
-            
+
             if len(stage_episodes) == 0:
                 continue
-            
+
             mean_length = stage_episodes['total_steps'].mean()
             std_length = stage_episodes['total_steps'].std()
-            
+
             stage_lengths.append((mean_length, std_length))
             stage_names.append(f"S{stage_id}: {stage['stage_name']}")
-        
-        # Create bar chart
-        x = np.arange(len(stage_names))
-        means = [m for m, _ in stage_lengths]
-        stds = [s for _, s in stage_lengths]
-        colors = [self._get_stage_color(i) for i in range(len(stage_names))]
-        
-        bars = ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.7)
-        
-        ax.set_xlabel('Stage')
-        ax.set_ylabel('Mean Episode Length')
-        ax.set_title('Episode Length by Stage')
-        ax.set_xticks(x)
-        ax.set_xticklabels(stage_names, rotation=45, ha='right')
-        ax.grid(True, alpha=0.3, axis='y')
-        
+
+        if not stage_lengths:
+            ax.text(0.5, 0.5, 'No training data available', ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            ax.set_title('Episode Length by Stage (No Data)')
+        else:
+            # Create bar chart
+            x = np.arange(len(stage_names))
+            means = [m for m, _ in stage_lengths]
+            stds = [s for _, s in stage_lengths]
+            colors = [self._get_stage_color(i) for i in range(len(stage_names))]
+
+            bars = ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.7)
+
+            ax.set_xlabel('Stage')
+            ax.set_ylabel('Mean Episode Length')
+            ax.set_title('Episode Length by Stage')
+            ax.set_xticks(x)
+            ax.set_xticklabels(stage_names, rotation=45, ha='right')
+            ax.grid(True, alpha=0.3, axis='y')
+
         plt.tight_layout()
-        
+
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        
+
         return fig
     
     def plot_learning_curves(
@@ -322,103 +340,110 @@ class MultiStagePlotter:
     ) -> plt.Figure:
         """
         Plot combined learning curves (rewards, success rate, length).
-        
+
         Args:
             save_path: Optional path to save figure
             window_size: Window size for smoothing
-            
+
         Returns:
             Matplotlib figure
         """
-        if 'episodes' not in self.data:
+        if 'episodes' not in self.data or len(self.data['episodes']) == 0:
             print("No episode data found")
             return None
-        
+
         fig, axes = plt.subplots(3, 1, figsize=(12, 12))
-        
+
         episodes_df = self.data['episodes']
-        
-        # Plot 1: Rewards
-        ax1 = axes[0]
-        ax1.plot(
-            episodes_df['global_episode_id'],
-            episodes_df['total_reward'],
-            alpha=0.3,
-            color='blue'
-        )
-        
-        if len(episodes_df) > window_size:
-            ma = episodes_df['total_reward'].rolling(window=window_size).mean()
+        has_data = len(episodes_df) > 0
+
+        if not has_data:
+            for ax in axes:
+                ax.text(0.5, 0.5, 'No training data available', ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            axes[0].set_title('Learning Curves (No Data)')
+            axes[2].set_xlabel('Global Episode')
+        else:
+            # Plot 1: Rewards
+            ax1 = axes[0]
             ax1.plot(
                 episodes_df['global_episode_id'],
-                ma,
-                color='blue',
-                linewidth=2,
-                label=f'{window_size}-episode MA'
+                episodes_df['total_reward'],
+                alpha=0.3,
+                color='blue'
             )
-        
-        ax1.set_ylabel('Total Reward')
-        ax1.set_title('Learning Curves')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # Add stage boundaries
-        for stage in self.stages:
-            if stage['end_episode']:
-                ax1.axvline(x=stage['end_episode'], color='gray', linestyle='--', alpha=0.5)
-        
-        # Plot 2: Success Rate
-        ax2 = axes[1]
-        success_rate = episodes_df['success'].rolling(window=window_size).mean()
-        ax2.plot(
-            episodes_df['global_episode_id'],
-            success_rate,
-            color='green',
-            linewidth=2
-        )
-        ax2.set_ylabel('Success Rate')
-        ax2.set_ylim([0, 1.05])
-        ax2.grid(True, alpha=0.3)
-        
-        # Add stage boundaries
-        for stage in self.stages:
-            if stage['end_episode']:
-                ax2.axvline(x=stage['end_episode'], color='gray', linestyle='--', alpha=0.5)
-        
-        # Plot 3: Episode Length
-        ax3 = axes[2]
-        ax3.plot(
-            episodes_df['global_episode_id'],
-            episodes_df['total_steps'],
-            alpha=0.3,
-            color='orange'
-        )
-        
-        if len(episodes_df) > window_size:
-            ma = episodes_df['total_steps'].rolling(window=window_size).mean()
+
+            if len(episodes_df) > window_size:
+                ma = episodes_df['total_reward'].rolling(window=window_size).mean()
+                ax1.plot(
+                    episodes_df['global_episode_id'],
+                    ma,
+                    color='blue',
+                    linewidth=2,
+                    label=f'{window_size}-episode MA'
+                )
+
+            ax1.set_ylabel('Total Reward')
+            ax1.set_title('Learning Curves')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
+
+            # Add stage boundaries
+            for stage in self.stages:
+                if stage['end_episode']:
+                    ax1.axvline(x=stage['end_episode'], color='gray', linestyle='--', alpha=0.5)
+
+            # Plot 2: Success Rate
+            ax2 = axes[1]
+            success_rate = episodes_df['success'].rolling(window=window_size).mean()
+            ax2.plot(
+                episodes_df['global_episode_id'],
+                success_rate,
+                color='green',
+                linewidth=2
+            )
+            ax2.set_ylabel('Success Rate')
+            ax2.set_ylim([0, 1.05])
+            ax2.grid(True, alpha=0.3)
+
+            # Add stage boundaries
+            for stage in self.stages:
+                if stage['end_episode']:
+                    ax2.axvline(x=stage['end_episode'], color='gray', linestyle='--', alpha=0.5)
+
+            # Plot 3: Episode Length
+            ax3 = axes[2]
             ax3.plot(
                 episodes_df['global_episode_id'],
-                ma,
-                color='orange',
-                linewidth=2,
-                label=f'{window_size}-episode MA'
+                episodes_df['total_steps'],
+                alpha=0.3,
+                color='orange'
             )
-        
-        ax3.set_xlabel('Global Episode')
-        ax3.set_ylabel('Episode Length')
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-        
-        # Add stage boundaries
-        for stage in self.stages:
-            if stage['end_episode']:
-                ax3.axvline(x=stage['end_episode'], color='gray', linestyle='--', alpha=0.5)
-        
+
+            if len(episodes_df) > window_size:
+                ma = episodes_df['total_steps'].rolling(window=window_size).mean()
+                ax3.plot(
+                    episodes_df['global_episode_id'],
+                    ma,
+                    color='orange',
+                    linewidth=2,
+                    label=f'{window_size}-episode MA'
+                )
+
+            ax3.set_xlabel('Global Episode')
+            ax3.set_ylabel('Episode Length')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+
+            # Add stage boundaries
+            for stage in self.stages:
+                if stage['end_episode']:
+                    ax3.axvline(x=stage['end_episode'], color='gray', linestyle='--', alpha=0.5)
+
         plt.tight_layout()
-        
+
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        
+
         return fig
     
     def plot_stage_comparison(
@@ -427,35 +452,35 @@ class MultiStagePlotter:
     ) -> plt.Figure:
         """
         Create comparison plot across stages.
-        
+
         Args:
             save_path: Optional path to save figure
-            
+
         Returns:
             Matplotlib figure
         """
-        if 'episodes' not in self.data or 'stages' not in self.data:
+        if 'episodes' not in self.data or 'stages' not in self.data or len(self.data['episodes']) == 0:
             print("Required data not found")
             return None
-        
+
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        
+
         episodes_df = self.data['episodes']
-        
+
         # Collect stage statistics
         stage_stats = []
         for stage in self.stages:
             stage_id = stage['stage_id']
             start_ep = stage['start_episode']
             end_ep = stage['end_episode'] or episodes_df['global_episode_id'].max()
-            
+
             mask = (episodes_df['global_episode_id'] >= start_ep) & \
                    (episodes_df['global_episode_id'] <= end_ep)
             stage_episodes = episodes_df[mask]
-            
+
             if len(stage_episodes) == 0:
                 continue
-            
+
             stage_stats.append({
                 'name': f"S{stage_id}: {stage['stage_name']}",
                 'mean_reward': stage_episodes['total_reward'].mean(),
@@ -464,13 +489,16 @@ class MultiStagePlotter:
                 'mean_length': stage_episodes['total_steps'].mean(),
                 'count': len(stage_episodes)
             })
-        
+
         if not stage_stats:
-            return None
-        
+            for ax in axes.flatten():
+                ax.text(0.5, 0.5, 'No training data available', ha='center', va='center', transform=ax.transAxes, fontsize=14)
+                ax.set_title('Stage Comparison (No Data)')
+            return fig
+
         names = [s['name'] for s in stage_stats]
         colors = [self._get_stage_color(i) for i in range(len(stage_stats))]
-        
+
         # Plot 1: Mean Reward
         ax1 = axes[0, 0]
         means = [s['mean_reward'] for s in stage_stats]
@@ -480,7 +508,7 @@ class MultiStagePlotter:
         ax1.set_title('Mean Reward by Stage')
         ax1.tick_params(axis='x', rotation=45)
         ax1.grid(True, alpha=0.3, axis='y')
-        
+
         # Plot 2: Success Rate
         ax2 = axes[0, 1]
         success_rates = [s['success_rate'] for s in stage_stats]
@@ -490,7 +518,7 @@ class MultiStagePlotter:
         ax2.set_ylim([0, 1.05])
         ax2.tick_params(axis='x', rotation=45)
         ax2.grid(True, alpha=0.3, axis='y')
-        
+
         # Plot 3: Episode Count
         ax3 = axes[1, 0]
         counts = [s['count'] for s in stage_stats]
@@ -499,7 +527,7 @@ class MultiStagePlotter:
         ax3.set_title('Episodes per Stage')
         ax3.tick_params(axis='x', rotation=45)
         ax3.grid(True, alpha=0.3, axis='y')
-        
+
         # Plot 4: Mean Episode Length
         ax4 = axes[1, 1]
         lengths = [s['mean_length'] for s in stage_stats]
@@ -508,12 +536,12 @@ class MultiStagePlotter:
         ax4.set_title('Mean Episode Length by Stage')
         ax4.tick_params(axis='x', rotation=45)
         ax4.grid(True, alpha=0.3, axis='y')
-        
+
         plt.tight_layout()
-        
+
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        
+
         return fig
     
     def generate_summary_report(self) -> Dict:

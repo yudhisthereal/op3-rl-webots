@@ -36,6 +36,7 @@ checkpoints/
 models/
 *.model
 *.weights
+controllers/*/runs/
 
 # Webots
 *.wbt.bak

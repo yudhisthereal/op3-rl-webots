@@ -51,9 +51,15 @@ sys.path.insert(0, PROJECT_ROOT)
 
 # Import logging
 from logging_utils import (
-    log, log_info, log_warning, log_error, log_success, 
+    log, log_info, log_warning, log_error, log_success,
     log_debug, log_data, log_exception, log_section,
     start_timer, stop_timer, LogFunction
+)
+
+# Import stats manager for proper HDF5 logging
+from stats_manager import (
+    HDF5StatsLogger, create_stats_logger,
+    StageInfo, EpisodeInfo, AgentInfo
 )
 
 
@@ -257,40 +263,7 @@ CONFIG = load_config()
 # STATISTICS AND PLOTTING
 # ============================================================================
 
-def save_detailed_stats(episode_stats, episode_num):
-    """Save detailed training statistics - matches PPO format exactly."""
-    with LogFunction("DDPGController", "save_detailed_stats", args=(episode_num,)):
-        
-        log_info("DDPGController", f"Saving detailed stats for episode {episode_num}")
-        
-        os.makedirs(STATS_DIR, exist_ok=True)
-        
-        stats_file = os.path.join(STATS_DIR, f"episode_{episode_num:04d}_stats.json")
-        
-        with open(stats_file, 'w') as f:
-            json.dump(episode_stats, f, indent=2)
-        
-        log_debug("DDPGController", f"Saved episode stats to: {stats_file}")
-        
-        # Also save to a cumulative file
-        cumulative_file = os.path.join(STATS_DIR, "all_episodes_summary.csv")
-        
-        if episode_num == 1:
-            with open(cumulative_file, 'w') as f:
-                f.write("episode,total_reward,steps,success,average_error,max_error,min_error\n")
-        
-        with open(cumulative_file, 'a') as f:
-            f.write(f"{episode_num},"
-                    f"{episode_stats['total_reward']:.4f},"
-                    f"{episode_stats['steps']},"
-                    f"{int(episode_stats['success'])},"
-                    f"{episode_stats['average_error']:.4f},"
-                    f"{episode_stats['max_error']:.4f},"
-                    f"{episode_stats['min_error']:.4f}\n")
-        
-        log_debug("DDPGController", f"Updated cumulative stats: {cumulative_file}")
-        
-        return cumulative_file
+
 
 
 def generate_training_plots(episode_rewards, episode_steps, success_history, 
@@ -1099,9 +1072,33 @@ def train_mode():
             success_threshold = CONFIG["early_stopping"]["success_threshold"]
             min_episodes = CONFIG["early_stopping"]["min_episodes"]
         
+        # Initialize HDF5 stats logger for both single-agent and multi-agent modes
+        stats_logger = create_stats_logger(CONTROLLER_DIR, "ddpg")
+
+        # Log stage information
+        stage_info = StageInfo(
+            stage_id=stage_id if is_multi_agent else 0,
+            stage_name=f"ddpg_training_stage_{stage_id if is_multi_agent else 0}",
+            start_episode_global=global_episode if is_multi_agent else 0,
+            hyperparameters=CONFIG["training"]["ddpg"],
+            metrics={}
+        )
+        stats_logger.log_stage(stage_info)
+
+        # Log agent information
+        agent_info = AgentInfo(
+            agent_id=agent.agent_id,
+            stage_id=stage_id if is_multi_agent else 0,
+            agent_type="ddpg",
+            parameters_hash="",  # Could compute hash of config
+            parent_id=agent.parent_id,
+            lineage_depth=agent.lineage_depth
+        )
+        stats_logger.log_agent(agent_info)
+
         log_info("DDPGController", "Starting DDPG training...")
         log_info("DDPGController", f"Early stopping: {early_stopping}, window: {window_size}, threshold: {success_threshold}")
-        
+
         for episode in range(1, max_episodes + 1):
             log_info("DDPGController", f"Starting episode {episode}/{max_episodes}")
             
@@ -1198,25 +1195,23 @@ def train_mode():
                     except Exception as e:
                         log_exception("DDPGController", e, f"Failed to save updated checkpoint")
 
-            # Save detailed episode stats (matches PPO) - only in single-agent mode
-            if not is_multi_agent:
-                episode_stats = {
-                    'episode': episode,
-                    'total_reward': float(total_reward),
-                    'steps': steps,
-                    'success': bool(success),
-                    'average_error': float(avg_error),
-                    'max_error': float(np.max(step_errors)) if step_errors else 0.0,
-                    'min_error': float(np.min(step_errors)) if step_errors else 0.0,
-                    'final_angles': {joint: float(env.sensors[joint].getValue() if joint in env.sensors else 0.0)
-                                for joint in CONFIG["control_joints"]},
-                    'goal_angles': CONFIG["goal_angles"],
-                    'step_rewards': step_rewards,
-                    'step_errors': step_errors,
-                    'step_actions': step_actions,
-                }
-                save_detailed_stats(episode_stats, episode)
-            
+            # Log episode to HDF5 stats
+            episode_info = EpisodeInfo(
+                global_episode_id=episode - 1,  # 0-based indexing
+                stage_id=stage_id if is_multi_agent else 0,
+                local_episode_id=episode - 1,
+                total_steps=steps,
+                total_reward=float(total_reward),
+                success=bool(success),
+                termination_reason='normal' if not done else 'time_limit',
+                agent_id=agent.agent_id,
+                start_idx=0,  # Will be updated by stats logger
+                end_idx=steps
+            )
+            stats_logger.log_episode(episode_info)
+
+            # Episode stats are now saved to HDF5 only
+
             # Calculate success rate
             if episode >= window_size:
                 recent_successes = episode_successes[-window_size:]
@@ -1277,7 +1272,25 @@ def train_mode():
                                 success_history, episode_errors, FINAL_PLOTS_DIR)
         
         total_time = time.time() - start_time
-        
+
+        # Log final stage metrics
+        if episode_rewards:
+            final_success_rate = success_history[-1] if success_history else 0.0
+            stats_logger.log_stage_summary(
+                stage_id=stage_id if is_multi_agent else 0,
+                mean_reward=float(np.mean(episode_rewards)),
+                success_rate=final_success_rate,
+                mean_episode_length=float(np.mean(episode_steps)),
+                window_size=window_size
+            )
+
+        # Update stage status to completed
+        stats_logger.update_stage(
+            stage_id=stage_id if is_multi_agent else 0,
+            end_episode_global=(global_episode + len(episode_rewards) - 1) if is_multi_agent else len(episode_rewards) - 1,
+            status="completed"
+        )
+
         log_section("DDPGController", "TRAINING COMPLETE")
         log_info("DDPGController", f"Total episodes: {len(episode_rewards)}")
         log_info("DDPGController", f"Total steps: {sum(episode_steps)}")
