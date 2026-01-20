@@ -44,7 +44,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 # Import stats manager for proper HDF5 logging
 from stats_manager import (
-    HDF5StatsLogger, create_stats_logger,
+    create_stats_logger,
     StageInfo, EpisodeInfo, AgentInfo,
     safe_torch_save, safe_torch_load
 )

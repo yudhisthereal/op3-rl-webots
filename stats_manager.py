@@ -16,7 +16,7 @@ import numpy as np
 import tables
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Callable
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -26,9 +26,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import logging
 from logging_utils import (
-    log, log_info, log_warning, log_error, log_success, 
+    log_info, log_warning, log_error, log_success, 
     log_debug, log_data, log_exception, log_section,
-    start_timer, stop_timer, LogFunction
+    LogFunction
 )
 
 
@@ -492,76 +492,102 @@ class AgentInfo:
 class HDF5StatsLogger:
     """
     HDF5-based statistics logger for multi-stage training.
-    
+
     Provides efficient storage and querying of:
     - Stage metadata
     - Episode results with stage context
     - Per-timestep data with agent tracking
     - Agent lineage information
     - Aggregated stage metrics
+
+    Multi-process safe with proper file locking.
     """
-    
+
     def __init__(
         self,
         filepath: str,
         mode: str = 'w',
         complevel: int = 9,
-        complib: str = 'blosc'
+        complib: str = 'blosc',
+        lock_timeout: float = 60.0,
+        lock_max_retries: int = 20
     ):
         """
         Initialize HDF5 statistics logger.
-        
+
         Args:
             filepath: Path to HDF5 file
             mode: 'w' (write), 'a' (append), 'r' (read)
             complevel: Compression level (0-9)
             complib: Compression library
+            lock_timeout: Maximum time to wait for file lock (seconds)
+            lock_max_retries: Maximum number of lock retry attempts
         """
         log_section("HDF5StatsLogger", "INITIALIZING STATS LOGGER")
-        
+
         with LogFunction("HDF5StatsLogger", "__init__",
                         args=(filepath, mode, complevel, complib)):
-            
+
             self.filepath = filepath
             self.mode = mode
-            
+            self._lock_timeout = lock_timeout
+            self._lock_max_retries = lock_max_retries
+
+            # Initialize file lock for multi-process safety
+            self._file_lock = FileLock(
+                filepath,
+                timeout=lock_timeout,
+                max_retries=lock_max_retries
+            )
+
             log_info("HDF5StatsLogger", f"HDF5 file: {filepath}")
             log_info("HDF5StatsLogger", f"Mode: {mode}")
             log_info("HDF5StatsLogger", f"Compression: {complib} level {complevel}")
-            
+            log_info("HDF5StatsLogger", f"Lock timeout: {lock_timeout}s, max retries: {lock_max_retries}")
+
             # Ensure directory exists
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            
-            # Open/create HDF5 file
-            self.h5file = tables.open_file(
-                filepath,
-                mode=mode,
-                title="Multi-Stage Training Statistics",
-                filters=tables.Filters(
-                    complevel=complevel,
-                    complib=complib
+
+            # Acquire file lock before opening HDF5 file
+            acquired_lock = self._file_lock.acquire(blocking=True)
+            if not acquired_lock:
+                raise RuntimeError(f"Could not acquire file lock for {filepath} within {lock_timeout}s")
+
+            try:
+                # Open/create HDF5 file
+                self.h5file = tables.open_file(
+                    filepath,
+                    mode=mode,
+                    title="Multi-Stage Training Statistics",
+                    filters=tables.Filters(
+                        complevel=complevel,
+                        complib=complib
+                    )
                 )
-            )
-            
-            # Initialize tables
-            self._init_tables()
-            
-            # Track counters
-            self._global_episode_counter = 0
-            self._global_timestep_counter = 0
-            self._current_stage_id = -1
-            
-            # Load existing counters if appending
-            if mode == 'a':
-                self._load_counters()
-            
-            log_data("HDF5StatsLogger", "Initial counters", {
-                "global_episode_counter": self._global_episode_counter,
-                "global_timestep_counter": self._global_timestep_counter,
-                "current_stage_id": self._current_stage_id
-            })
-            
-            log_success("HDF5StatsLogger", "Stats logger initialized")
+
+                # Initialize tables
+                self._init_tables()
+
+                # Track counters
+                self._global_episode_counter = 0
+                self._global_timestep_counter = 0
+                self._current_stage_id = -1
+
+                # Load existing counters if appending
+                if mode == 'a':
+                    self._load_counters()
+
+                log_data("HDF5StatsLogger", "Initial counters", {
+                    "global_episode_counter": self._global_episode_counter,
+                    "global_timestep_counter": self._global_timestep_counter,
+                    "current_stage_id": self._current_stage_id
+                })
+
+                log_success("HDF5StatsLogger", "Stats logger initialized")
+
+            except Exception as e:
+                self._file_lock.release()
+                raise
     
     def _init_tables(self):
         """Initialize all required HDF5 tables."""
@@ -1298,27 +1324,34 @@ class HDF5StatsLogger:
             return df
     
     # ==================== Context Manager ====================
-    
+
     def __enter__(self):
         """Context manager entry."""
         log_debug("HDF5StatsLogger", "Entering context manager")
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - ensures proper cleanup."""
         log_debug("HDF5StatsLogger", "Exiting context manager")
         self.close()
         return False
-    
+
     def close(self):
-        """Close HDF5 file properly."""
+        """Close HDF5 file properly and release file lock."""
+        # Close HDF5 file
         if hasattr(self, 'h5file') and self.h5file.isopen:
             log_info("HDF5StatsLogger", "Closing HDF5 file")
             self.h5file.close()
             log_success("HDF5StatsLogger", "HDF5 file closed")
-    
+
+        # Release file lock
+        if hasattr(self, '_file_lock') and self._file_lock._locked:
+            log_debug("HDF5StatsLogger", "Releasing file lock")
+            self._file_lock.release()
+            log_success("HDF5StatsLogger", "File lock released")
+
     def __del__(self):
-        """Destructor - ensure file is closed."""
+        """Destructor - ensure file is closed and lock is released."""
         self.close()
 
 

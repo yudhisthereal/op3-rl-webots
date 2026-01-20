@@ -30,15 +30,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import logging
 from logging_utils import (
-    log, log_info, log_warning, log_error, log_success, 
+    log_info, log_warning, log_error, log_success, 
     log_debug, log_data, log_exception, log_section,
-    start_timer, stop_timer, LogFunction
+    LogFunction
 )
 
 from stats_manager import HDF5StatsLogger, StageInfo, EpisodeInfo, AgentInfo
-from stats_manager import safe_torch_save, safe_torch_load
 from evolutionary_operators import (
-    SelectionOperator,
     MutationOperator,
     EvolutionaryAlgorithm,
     EvolutionResult

@@ -50,15 +50,15 @@ sys.path.insert(0, PROJECT_ROOT)
 
 # Import logging
 from logging_utils import (
-    log, log_info, log_warning, log_error, log_success,
+    log_info, log_warning, log_error, log_success,
     log_debug, log_data, log_exception, log_section,
-    start_timer, stop_timer, LogFunction
+    LogFunction
 )
 
 # Import stats manager for proper HDF5 logging
 from stats_manager import (
-    HDF5StatsLogger, create_stats_logger,
-    StageInfo, EpisodeInfo, AgentInfo,
+    create_stats_logger,
+    StageInfo, AgentInfo,
     safe_torch_save, safe_torch_load
 )
 
